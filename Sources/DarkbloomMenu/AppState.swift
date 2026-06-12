@@ -25,53 +25,20 @@ enum NodeStatus: Equatable {
     }
 }
 
-/// One of the account's machines, assembled from earnings history (which
-/// provider IDs belong to this account) joined with the coordinator's live
-/// connected-provider list.
+/// A machine of yours that is currently connected to the coordinator.
+/// Both provider_id and provider_key rotate across provider restarts, so
+/// offline machines can't be enumerated from the public API — only machines
+/// we can positively identify right now are listed: this Mac by hardware
+/// serial, others by their current provider_id appearing in the account's
+/// recent earnings.
 struct FleetMachine: Identifiable {
-    var id: String                                   // provider_id
-    var live: CoordinatorAPI.AttestedProvider?       // nil → not connected
-    var earnedMicroUSD: Int64
-    var jobs: Int
-    var lastSeen: Date?
+    var live: CoordinatorAPI.AttestedProvider
     var isThisMac: Bool
 
+    var id: String { live.providerID }
+
     var displayName: String {
-        guard let info = live ?? MachineCache.shared.lookup(id) else {
-            return "Mac \(id.filter { $0.isLetter || $0.isNumber }.prefix(8))"
-        }
-        return info.chipName.replacingOccurrences(of: "Apple ", with: "")
-    }
-}
-
-/// Remembers hardware identity for machines we've seen connected, so they
-/// keep a readable name while offline (earnings entries carry only IDs).
-final class MachineCache {
-    static let shared = MachineCache()
-    private let key = "seenMachines"
-    private var byID: [String: CoordinatorAPI.AttestedProvider]
-
-    private init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let cached = try? JSONDecoder().decode([String: CoordinatorAPI.AttestedProvider].self, from: data) {
-            byID = cached
-        } else {
-            byID = [:]
-        }
-    }
-
-    func lookup(_ id: String) -> CoordinatorAPI.AttestedProvider? { byID[id] }
-
-    func remember(_ providers: [CoordinatorAPI.AttestedProvider]) {
-        // Indexed under both keys: provider_id for joining earnings history,
-        // serial number for naming machines that are currently offline.
-        for p in providers {
-            byID[p.providerID] = p
-            byID[p.serialNumber] = p
-        }
-        if let data = try? JSONEncoder().encode(byID) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        live.chipName.replacingOccurrences(of: "Apple ", with: "")
     }
 }
 
@@ -149,51 +116,16 @@ final class AppState: ObservableObject {
         last24hJobs = dj
     }
 
-    /// A provider gets a fresh provider_id each time it registers, so machines
-    /// are grouped by stable identity instead: serial number when the cache has
-    /// seen any of the machine's provider_ids connected, else the earnings'
-    /// provider_key (stable hardware key).
     private func rebuildFleet(_ entries: [CoordinatorAPI.Earning], connected: [CoordinatorAPI.AttestedProvider]) {
-        MachineCache.shared.remember(connected)
-
-        // Any earning whose provider_id we've seen connected ties that
-        // provider_key to a serial number, merging that key's whole history.
-        var serialByKey: [String: String] = [:]
-        for e in entries {
-            if let serial = MachineCache.shared.lookup(e.providerID)?.serialNumber {
-                serialByKey[e.providerKey] = serial
-            }
-        }
-
-        var machines: [String: FleetMachine] = [:]
-        for e in entries {
-            let key = serialByKey[e.providerKey] ?? e.providerKey
-            var m = machines[key] ?? FleetMachine(
-                id: key, live: nil, earnedMicroUSD: 0, jobs: 0, lastSeen: nil, isThisMac: false)
-            m.earnedMicroUSD += e.amountMicroUSD
-            m.jobs += 1
-            m.lastSeen = max(m.lastSeen ?? .distantPast, e.createdAt)
-            machines[key] = m
-        }
-        for live in connected {
-            let key = live.serialNumber
-            if machines[key] != nil || live.serialNumber == localSerial {
-                var m = machines[key] ?? FleetMachine(
-                    id: key, live: nil, earnedMicroUSD: 0, jobs: 0, lastSeen: nil, isThisMac: false)
-                m.live = live
-                machines[key] = m
-            }
-        }
-        fleet = machines.values
-            .map { m in
-                var m = m
-                let serial = m.live?.serialNumber ?? MachineCache.shared.lookup(m.id)?.serialNumber ?? m.id
-                m.isThisMac = serial == localSerial
-                return m
-            }
+        let recentIDs = Set(entries.map(\.providerID))
+        var seenSerials = Set<String>()
+        fleet = connected
+            .filter { $0.serialNumber == localSerial || recentIDs.contains($0.providerID) }
+            .filter { seenSerials.insert($0.serialNumber).inserted }
+            .map { FleetMachine(live: $0, isThisMac: $0.serialNumber == localSerial) }
             .sorted { a, b in
                 if a.isThisMac != b.isThisMac { return a.isThisMac }
-                return a.earnedMicroUSD > b.earnedMicroUSD
+                return a.displayName < b.displayName
             }
     }
 

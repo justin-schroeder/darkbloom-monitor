@@ -30,22 +30,13 @@ enum StatusIcon {
         let key = status.label
         if let img = cache[key] { return img }
 
-        let symbol = NSImage(systemSymbolName: "leaf.fill", accessibilityDescription: "Darkbloom")!
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))!
-        let size = NSSize(width: 18, height: 16)
-        let img = NSImage(size: size, flipped: false) { rect in
-            let tint: NSColor = status.color
-            tint.set()
-            let symbolRect = NSRect(
-                x: (rect.width - symbol.size.width) / 2,
-                y: (rect.height - symbol.size.height) / 2,
-                width: symbol.size.width,
-                height: symbol.size.height)
-            symbol.draw(in: symbolRect)
-            // Tint by compositing the color through the symbol's alpha.
-            NSGraphicsContext.current?.cgContext.setBlendMode(.sourceAtop)
-            tint.setFill()
-            rect.fill()
+        let size = NSSize(width: 16, height: 16)
+        // flipped: true so the y-down logo coordinates draw upright.
+        let img = NSImage(size: size, flipped: true) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.addPath(DarkbloomLogo.path(fitting: rect.insetBy(dx: 1.5, dy: 1.5)))
+            ctx.setFillColor(status.color.cgColor)
+            ctx.fillPath()
             return true
         }
         img.isTemplate = false

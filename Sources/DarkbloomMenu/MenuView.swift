@@ -23,6 +23,7 @@ struct MenuView: View {
                     earningsSection
                     thisMacSection
                     fleetSection
+                    recentSection
                     if let err = state.remoteError {
                         Label(err, systemImage: "exclamationmark.triangle")
                             .font(.caption)
@@ -149,37 +150,33 @@ struct MenuView: View {
 
     // MARK: Fleet
 
+    // Only shown when more than this Mac is online — offline machines can't
+    // be enumerated from the public API, and a single-Mac account is already
+    // fully described by the This Mac section.
     @ViewBuilder
     private var fleetSection: some View {
-        if state.fleet.count > 1 || state.fleet.contains(where: { !$0.isThisMac }) {
+        if state.fleet.contains(where: { !$0.isThisMac }) {
             VStack(alignment: .leading, spacing: 6) {
                 sectionLabel("My Macs")
                 ForEach(state.fleet) { m in
                     HStack(spacing: 7) {
                         Circle()
-                            .fill(m.live != nil ? Color.green : Color.secondary.opacity(0.4))
+                            .fill(Color.green)
                             .frame(width: 7, height: 7)
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 4) {
-                                Text(m.displayName)
-                                    .font(.system(size: 12, weight: .medium))
-                                if m.isThisMac {
-                                    Text("this Mac")
-                                        .font(.system(size: 9))
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(.quaternary, in: Capsule())
-                                }
-                            }
-                            Text(fleetSubtitle(m))
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                        Text(m.displayName)
+                            .font(.system(size: 12, weight: .medium))
+                        if m.isThisMac {
+                            Text("this Mac")
+                                .font(.system(size: 9))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
                         }
                         Spacer()
-                        Text(Fmt.usd(m.earnedMicroUSD))
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                        Text(fleetSubtitle(m))
+                            .font(.system(size: 10))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
             }
@@ -187,12 +184,33 @@ struct MenuView: View {
     }
 
     private func fleetSubtitle(_ m: FleetMachine) -> String {
-        if let live = m.live {
-            guard let models = live.models, !models.isEmpty else { return live.status }
-            return models.joined(separator: ", ")
+        guard let models = m.live.models, !models.isEmpty else { return m.live.status }
+        return models.joined(separator: ", ")
+    }
+
+    // MARK: Recent jobs
+
+    @ViewBuilder
+    private var recentSection: some View {
+        if let recent = state.earnings?.earnings.prefix(4), !recent.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                sectionLabel("Recent Jobs")
+                ForEach(Array(recent)) { e in
+                    HStack(spacing: 6) {
+                        Text(e.model)
+                            .font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(Fmt.ago(e.createdAt))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                        Text(Fmt.usd(e.amountMicroUSD))
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
-        if let seen = m.lastSeen { return "offline · last job \(Fmt.ago(seen))" }
-        return "offline"
     }
 
     // MARK: Footer

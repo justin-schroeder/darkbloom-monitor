@@ -15,9 +15,10 @@ status, and start/stop controls.
   counts, straight from the Darkbloom coordinator.
 - **This Mac** — model currently being served, warm models, requests served,
   tokens generated, GPU memory in use, uptime, and trust level.
-- **My Macs** — every machine on your account: online machines with the
-  models they're serving, offline ones with when they last earned, and
-  per-machine lifetime earnings.
+- **Recent jobs** — the latest paid inference jobs with model, time, and
+  payout.
+- **My Macs** — shown only when more than one of your machines is online,
+  with the models each is serving.
 - **Controls** — Stop, Start, and Restart the provider, plus a link to the
   web console.
 
@@ -44,13 +45,14 @@ data the CLI uses:
 |------|--------|
 | Local provider status | `~/.darkbloom/daemon-state.json`, rewritten by the provider every heartbeat and considered stale after 90s (same rule as `darkbloom status`); liveness via `kill(pid, 0)` |
 | Earnings + balance | `GET https://api.darkbloom.dev/v1/provider/account-earnings`, authenticated with the CLI's device-login token from `~/.darkbloom/auth_token` |
-| Fleet (which Macs online, models served) | public `GET /v1/providers/attestation`, joined against the account's earnings history |
+| Fleet (which Macs online, models served) | public `GET /v1/providers/attestation`, filtered to providers whose ids appear in the account's recent earnings (or whose serial matches this Mac) |
 | Start / Stop / Restart | shells out to `~/.darkbloom/bin/darkbloom`, which manages the `io.darkbloom.provider` LaunchAgent via `launchctl` |
 
-Because a provider gets a fresh `provider_id` on every registration, machines
-are identified by hardware serial number (learned from the attestation feed
-and cached in `UserDefaults`) with the stable `provider_key` as fallback, so
-earnings history stays attached to the right Mac across restarts.
+Both `provider_id` and `provider_key` rotate when the provider restarts, so
+offline machines can't be enumerated from the public API — the fleet list
+only includes machines that are verifiably yours and online right now. (A
+true offline fleet view would need the web console's `/v1/me/providers`,
+which only accepts interactive browser sessions.)
 
 `darkbloom start` normally opens an interactive model picker; the app instead
 replays the `--model` flags recorded in the LaunchAgent plist from your last
