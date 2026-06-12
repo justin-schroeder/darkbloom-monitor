@@ -31,6 +31,13 @@ enum NodeStatus: Equatable {
 /// we can positively identify right now are listed: this Mac by hardware
 /// serial, others by their current provider_id appearing in the account's
 /// recent earnings.
+struct HourBucket: Identifiable {
+    var hour: Date
+    var jobs: Int
+    var microUSD: Int64
+    var id: Date { hour }
+}
+
 struct FleetMachine: Identifiable {
     var live: CoordinatorAPI.AttestedProvider
     var isThisMac: Bool
@@ -51,6 +58,7 @@ final class AppState: ObservableObject {
     @Published var last24hMicroUSD: Int64 = 0
     @Published var last7dMicroUSD: Int64 = 0
     @Published var last24hJobs: Int = 0
+    @Published var hourlyJobs: [HourBucket] = []
     @Published var remoteError: String?
     @Published var controlBusy = false
     @Published var controlError: String?
@@ -114,6 +122,22 @@ final class AppState: ObservableObject {
         last24hMicroUSD = d
         last7dMicroUSD = w
         last24hJobs = dj
+
+        // 24 hourly buckets ending at the current hour, oldest first.
+        let hourStart = Calendar.current.dateInterval(of: .hour, for: now)?.start ?? now
+        var buckets: [Date: HourBucket] = [:]
+        for i in 0..<24 {
+            let h = hourStart.addingTimeInterval(Double(-i) * 3_600)
+            buckets[h] = HourBucket(hour: h, jobs: 0, microUSD: 0)
+        }
+        for e in entries where e.createdAt > day {
+            guard let h = Calendar.current.dateInterval(of: .hour, for: e.createdAt)?.start,
+                  var b = buckets[h] else { continue }
+            b.jobs += 1
+            b.microUSD += e.amountMicroUSD
+            buckets[h] = b
+        }
+        hourlyJobs = buckets.values.sorted { $0.hour < $1.hour }
     }
 
     private func rebuildFleet(_ entries: [CoordinatorAPI.Earning], connected: [CoordinatorAPI.AttestedProvider]) {

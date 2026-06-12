@@ -15,8 +15,7 @@ status, and start/stop controls.
   counts, straight from the Darkbloom coordinator.
 - **This Mac** — model currently being served, warm models, requests served,
   tokens generated, GPU memory in use, uptime, and trust level.
-- **Recent jobs** — the latest paid inference jobs with model, time, and
-  payout.
+- **Jobs chart** — paid inference jobs per hour over the last 24 hours.
 - **My Macs** — shown only when more than one of your machines is online,
   with the models each is serving.
 - **Controls** — Stop, Start, and Restart the provider, plus a link to the

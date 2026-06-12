@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 private struct ContentHeightKey: PreferenceKey {
@@ -23,7 +24,7 @@ struct MenuView: View {
                     earningsSection
                     thisMacSection
                     fleetSection
-                    recentSection
+                    chartSection
                     if let err = state.remoteError {
                         Label(err, systemImage: "exclamationmark.triangle")
                             .font(.caption)
@@ -188,27 +189,39 @@ struct MenuView: View {
         return models.joined(separator: ", ")
     }
 
-    // MARK: Recent jobs
+    // MARK: Jobs chart
 
     @ViewBuilder
-    private var recentSection: some View {
-        if let recent = state.earnings?.earnings.prefix(4), !recent.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
-                sectionLabel("Recent Jobs")
-                ForEach(Array(recent)) { e in
-                    HStack(spacing: 6) {
-                        Text(e.model)
-                            .font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1)
-                        Spacer()
-                        Text(Fmt.ago(e.createdAt))
-                            .font(.system(size: 10))
+    private var chartSection: some View {
+        if !state.hourlyJobs.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                sectionLabel("Jobs · Last 24 Hours")
+                Chart(state.hourlyJobs) { b in
+                    BarMark(
+                        x: .value("Hour", b.hour, unit: .hour),
+                        y: .value("Jobs", b.jobs),
+                        width: .ratio(0.7)
+                    )
+                    .foregroundStyle(Color.green.gradient)
+                    .cornerRadius(1.5)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) {
+                        AxisGridLine().foregroundStyle(.quaternary)
+                        AxisValueLabel(format: .dateTime.hour())
+                            .font(.system(size: 8))
                             .foregroundStyle(.tertiary)
-                        Text(Fmt.usd(e.amountMicroUSD))
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
                     }
                 }
+                .chartYAxis {
+                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
+                        AxisGridLine().foregroundStyle(.quaternary)
+                        AxisValueLabel()
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(height: 64)
             }
         }
     }
