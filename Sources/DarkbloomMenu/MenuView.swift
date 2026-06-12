@@ -121,8 +121,8 @@ struct MenuView: View {
                         row("Warm", warm.joined(separator: ", "), mono: true)
                     }
                     if let s = d.stats {
-                        row("Requests", Fmt.count(s.requestsServed))
-                        row("Tokens out", Fmt.count(s.tokensGenerated))
+                        row("Requests (session)", Fmt.count(s.requestsServed))
+                        row("Tokens (session)", Fmt.count(s.tokensGenerated))
                     }
                     if let c = d.capacity {
                         row("GPU memory", String(format: "%.1f / %.0f GB", c.gpuMemoryActiveGb, c.totalMemoryGb))
@@ -133,7 +133,7 @@ struct MenuView: View {
                             Text("Trust")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 80, alignment: .leading)
+                                .frame(width: 105, alignment: .leading)
                             Image(systemName: t.trustLevel == "hardware" ? "checkmark.shield.fill" : "shield")
                                 .font(.system(size: 10))
                                 .foregroundStyle(t.trustLevel == "hardware" ? .green : .orange)
@@ -141,7 +141,7 @@ struct MenuView: View {
                                 .font(.system(size: 11))
                         }
                     }
-                    Text("Requests and tokens count this session — they reset when the provider restarts.")
+                    Text("Session stats reset when the provider restarts.")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
                         .padding(.top, 2)
@@ -309,7 +309,7 @@ struct MenuView: View {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .frame(width: 80, alignment: .leading)
+                .frame(width: 105, alignment: .leading)
             Text(value)
                 .font(.system(size: 11, design: mono ? .monospaced : .default))
                 .lineLimit(2)
