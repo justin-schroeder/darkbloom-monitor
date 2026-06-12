@@ -1,4 +1,5 @@
 import Charts
+import DarkbloomCore
 import SwiftUI
 
 private struct ContentHeightKey: PreferenceKey {
@@ -87,12 +88,12 @@ struct MenuView: View {
                 }
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 3) {
                     GridRow {
-                        stat("Today", Fmt.usd(state.last24hMicroUSD))
-                        stat("7 days", Fmt.usd(state.last7dMicroUSD))
+                        stat("Today", Fmt.usd(state.windows.last24hMicroUSD))
+                        stat("7 days", Fmt.usd(state.windows.last7dMicroUSD))
                         stat("Lifetime", Fmt.usd(e.totalMicroUSD))
                     }
                     GridRow {
-                        stat("Jobs today", "\(state.last24hJobs)")
+                        stat("Jobs today", "\(state.windows.last24hJobs)")
                         stat("Total jobs", "\(e.count)")
                         Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                     }
@@ -126,7 +127,7 @@ struct MenuView: View {
                     if let c = d.capacity {
                         row("GPU memory", String(format: "%.1f / %.0f GB", c.gpuMemoryActiveGb, c.totalMemoryGb))
                     }
-                    row("Uptime", Fmt.uptime(d.uptime))
+                    row("Uptime", Fmt.uptime(d.uptime()))
                     if let t = d.trust {
                         HStack(spacing: 4) {
                             Text("Trust")
@@ -140,6 +141,10 @@ struct MenuView: View {
                                 .font(.system(size: 11))
                         }
                     }
+                    Text("Requests and tokens count this session — they reset when the provider restarts.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
                 }
             } else {
                 Text("Provider is not running")

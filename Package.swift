@@ -5,9 +5,14 @@ let package = Package(
     name: "DarkbloomMenu",
     platforms: [.macOS(.v14)],
     targets: [
+        .target(name: "DarkbloomCore"),
         .executableTarget(
             name: "DarkbloomMenu",
-            path: "Sources/DarkbloomMenu"
-        )
+            dependencies: ["DarkbloomCore"]
+        ),
+        .testTarget(
+            name: "DarkbloomCoreTests",
+            dependencies: ["DarkbloomCore"]
+        ),
     ]
 )

@@ -3,10 +3,10 @@ import AppKit
 /// The Darkbloom logomark, traced from the `logo-symbol` SVG on
 /// darkbloom.dev (viewBox 0 0 221 253, three `currentColor` polygons).
 /// Coordinates are y-down like the SVG; draw into a flipped context.
-enum DarkbloomLogo {
-    static let viewBox = CGSize(width: 221.31, height: 252.91)
+public enum DarkbloomLogo {
+    public static let viewBox = CGSize(width: 221.31, height: 252.91)
 
-    static let polygons: [[CGPoint]] = [
+    public static let polygons: [[CGPoint]] = [
         [
             CGPoint(x: 126.46, y: 126.46), CGPoint(x: 94.85, y: 126.46),
             CGPoint(x: 94.85, y: 189.67), CGPoint(x: 63.22, y: 189.67),
@@ -32,7 +32,7 @@ enum DarkbloomLogo {
     ]
 
     /// Path scaled to fit `rect`, preserving aspect ratio and centered.
-    static func path(fitting rect: CGRect) -> CGPath {
+    public static func path(fitting rect: CGRect) -> CGPath {
         let scale = min(rect.width / viewBox.width, rect.height / viewBox.height)
         let drawn = CGSize(width: viewBox.width * scale, height: viewBox.height * scale)
         var transform = CGAffineTransform(

@@ -1,4 +1,5 @@
 import AppKit
+import DarkbloomCore
 import SwiftUI
 
 @main
