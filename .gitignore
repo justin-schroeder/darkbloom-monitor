@@ -1,4 +1,21 @@
+# Build artifacts
 .build/
 dist/
+DerivedData/
+*.dmg
+*.zip
+*.icns
+
+# Swift / Xcode local state
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+
+# Logs & temp
+*.log
+*.tmp
+
+# Tooling & local state
 .claude/
+.dmux/
 .DS_Store
