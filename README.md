@@ -1,71 +1,113 @@
-# Darkbloom Monitor
+<div align="center">
 
-A native macOS menu bar app for [Darkbloom](https://www.darkbloom.dev) providers.
-A green or red leaf in the menu bar shows at a glance whether your Mac is
-selling compute; clicking it opens a native dropdown with earnings, fleet
-status, and start/stop controls.
+# 🌑 Darkbloom Monitor
 
-![status: green = serving, red = stopped]
+**Your Mac is earning. Now you can watch it.**
 
-## What it shows
+A native macOS menu bar app for [Darkbloom](https://www.darkbloom.dev)
+providers — one glance tells you whether you're selling compute, one click
+tells you everything else.
 
-- **Menu bar leaf** — green when the provider is online and trusted, orange
-  while connecting, red when stopped.
-- **Earnings** — account balance, today / 7 days / lifetime totals, and job
-  counts, straight from the Darkbloom coordinator.
-- **This Mac** — model currently being served, warm models, requests served,
-  tokens generated, GPU memory in use, uptime, and trust level.
-- **Jobs chart** — paid inference jobs per hour over the last 24 hours.
-- **My Macs** — shown only when more than one of your machines is online,
-  with the models each is serving.
-- **Controls** — Stop, Start, and Restart the provider, plus a link to the
-  web console.
+[![CI](https://github.com/justin-schroeder/darkbloom-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/justin-schroeder/darkbloom-monitor/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/justin-schroeder/darkbloom-monitor?display_name=tag&sort=semver)](https://github.com/justin-schroeder/darkbloom-monitor/releases/latest)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
+
+<img src="docs/screenshot.png" width="340" alt="Darkbloom Monitor dropdown showing earnings, provider status, and an hourly jobs chart">
+
+</div>
+
+## What you get
+
+🟢 **The logomark in your menu bar** — green when your Mac is online and
+earning, orange while connecting, red when stopped. That's the whole pitch.
+
+Click it for the rest:
+
+- 💰 **Earnings** — balance, today / 7 days / lifetime, and job counts,
+  straight from the Darkbloom coordinator
+- 🖥️ **This Mac** — the model being served, requests and tokens this
+  session, GPU memory, uptime, and trust level
+- 📊 **Jobs chart** — paid inference jobs per hour over the last 24 hours
+- 💻 **My Macs** — appears when more than one of your machines is online,
+  with the models each is serving
+- ⏯️ **Start / Stop / Restart** — control the provider without opening a
+  terminal
 
 ## Install
 
-```sh
-./scripts/build-app.sh
-```
+1. Grab the `.dmg` from the [latest release](https://github.com/justin-schroeder/darkbloom-monitor/releases/latest)
+2. Drag **Darkbloom Monitor** to Applications
+3. Double-click it — the logomark appears in your menu bar
 
-Copy `dist/Darkbloom Monitor.app` to `/Applications` and double-click it.
-The app has no dock icon (`LSUIElement`); it lives only in the menu bar.
-To start it at login: System Settings → General → Login Items → add the app.
+The app needs the [darkbloom CLI](https://github.com/Layr-Labs/d-inference)
+installed and logged in (`darkbloom login`). It reuses the CLI's credentials
+and state — there is nothing else to configure. To launch at login:
+System Settings → General → Login Items.
 
-Requires the [darkbloom CLI](https://github.com/Layr-Labs/d-inference) to be
-installed and logged in (`darkbloom login`). The app reuses the CLI's
-credentials and state — no separate setup.
+> [!NOTE]
+> Unsigned builds need a right-click → Open on first launch (or
+> `xattr -d com.apple.quarantine "/Applications/Darkbloom Monitor.app"`).
+> Releases are Developer ID signed and notarized when the signing secrets
+> are configured — see [Releasing](#releasing).
 
 ## How it works
 
-No private APIs and no extra auth — the app interfaces with exactly the same
-data the CLI uses:
+No private APIs, no extra auth, no daemon of its own — the app reads exactly
+the same data the CLI does:
 
-| Data | Source |
-|------|--------|
-| Local provider status | `~/.darkbloom/daemon-state.json`, rewritten by the provider every heartbeat and considered stale after 90s (same rule as `darkbloom status`); liveness via `kill(pid, 0)` |
-| Earnings + balance | `GET https://api.darkbloom.dev/v1/provider/account-earnings`, authenticated with the CLI's device-login token from `~/.darkbloom/auth_token` |
-| Fleet (which Macs online, models served) | public `GET /v1/providers/attestation`, filtered to providers whose ids appear in the account's recent earnings (or whose serial matches this Mac) |
-| Start / Stop / Restart | shells out to `~/.darkbloom/bin/darkbloom`, which manages the `io.darkbloom.provider` LaunchAgent via `launchctl` |
+| Data | Source | Cadence |
+|------|--------|---------|
+| Provider status | `~/.darkbloom/daemon-state.json` + pid liveness probe — the same staleness rule `darkbloom status` uses | every 3s |
+| Earnings & balance | `GET api.darkbloom.dev/v1/provider/account-earnings`, authenticated with the CLI's device token | every 30s |
+| Fleet | public `GET /v1/providers/attestation`, filtered to machines verifiably yours | every 30s |
+| Start / Stop / Restart | shells out to the `darkbloom` CLI, which drives the `io.darkbloom.provider` LaunchAgent | on click |
 
-Both `provider_id` and `provider_key` rotate when the provider restarts, so
-offline machines can't be enumerated from the public API — the fleet list
-only includes machines that are verifiably yours and online right now. (A
-true offline fleet view would need the web console's `/v1/me/providers`,
-which only accepts interactive browser sessions.)
+Measured footprint: 0.0% CPU, power impact 0.0 — the provider it watches
+does real GPU work; the monitor is a rounding error.
 
-`darkbloom start` normally opens an interactive model picker; the app instead
-replays the `--model` flags recorded in the LaunchAgent plist from your last
-`darkbloom start`, so the same models come back up. If no plist exists yet
-(fresh install), run `darkbloom start` once in Terminal to pick models.
-
-Polling: local state every 3s, coordinator every 30s (the earnings endpoint
-is server-cached for 20s anyway).
+A few hard-won details live in [AGENTS.md](AGENTS.md), including why
+machines are identified by hardware serial (both `provider_id` and
+`provider_key` rotate every restart) and why the app replays `--model`
+flags from the LaunchAgent plist when starting.
 
 ## Development
 
 ```sh
-swift build            # debug build
-./scripts/build-app.sh # release build + .app bundle + zip in dist/
+swift test                  # the test suite
+./scripts/build-app.sh      # release build → dist/Darkbloom Monitor.app
+./scripts/make-dmg.sh       # package the .dmg
 ```
 
-Swift 5.10+, macOS 14+. No dependencies.
+Plain SwiftPM — no Xcode project, no dependencies. `DarkbloomCore` holds
+everything testable (decoding, earnings math, fleet logic); the executable
+target is a thin SwiftUI shell. Commits follow
+[Conventional Commits](https://www.conventionalcommits.org), which is what
+builds the release changelogs.
+
+## Releasing
+
+```sh
+./scripts/release.sh patch   # or minor / major / an explicit 1.2.3
+```
+
+That runs the tests, bumps the version, tags `vX.Y.Z`, and pushes. GitHub
+Actions does the rest: build → sign → notarize → package `.dmg` → publish a
+GitHub Release with a changelog generated from the conventional commits
+since the previous tag.
+
+For Developer ID signing and notarization, set these repository secrets
+(otherwise releases fall back to ad-hoc signing and say so in the notes):
+
+| Secret | Contents |
+|--------|----------|
+| `MACOS_CERTIFICATE_P12` | base64 of a Developer ID Application `.p12` export |
+| `MACOS_CERTIFICATE_PASSWORD` | the `.p12` password |
+| `NOTARY_APPLE_ID` | Apple ID email for notarization |
+| `NOTARY_TEAM_ID` | 10-character team id |
+| `NOTARY_PASSWORD` | app-specific password for `notarytool` |
+
+---
+
+<div align="center">
+<sub>Unofficial. Not affiliated with Darkbloom or Layr Labs — just a happy provider who wanted a green dot.</sub>
+</div>
