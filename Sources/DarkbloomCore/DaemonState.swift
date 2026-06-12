@@ -29,10 +29,26 @@ public struct DaemonState: Decodable {
     public struct Capacity: Decodable {
         public var totalMemoryGb: Double
         public var gpuMemoryActiveGb: Double
+        public var gpuMemoryCacheGb: Double?
 
         enum CodingKeys: String, CodingKey {
             case totalMemoryGb = "total_memory_gb"
             case gpuMemoryActiveGb = "gpu_memory_active_gb"
+            case gpuMemoryCacheGb = "gpu_memory_cache_gb"
+        }
+    }
+
+    /// Host health snapshot; the provider includes it only on some versions
+    /// and heartbeats, so every field is optional.
+    public struct SystemInfo: Decodable {
+        public var memoryPressure: Double?
+        public var cpuUsage: Double?
+        public var thermalState: String?
+
+        enum CodingKeys: String, CodingKey {
+            case memoryPressure = "memory_pressure"
+            case cpuUsage = "cpu_usage"
+            case thermalState = "thermal_state"
         }
     }
 
@@ -46,9 +62,10 @@ public struct DaemonState: Decodable {
     public var inferenceActive: Bool?
     public var stats: Stats?
     public var capacity: Capacity?
+    public var system: SystemInfo?
 
     enum CodingKeys: String, CodingKey {
-        case pid, version, trust, stats, capacity
+        case pid, version, trust, stats, capacity, system
         case writtenAt = "written_at"
         case startedAt = "started_at"
         case currentModel = "current_model"

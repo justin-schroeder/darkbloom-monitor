@@ -33,6 +33,21 @@ final class DaemonStateTests: XCTestCase {
         XCTAssertEqual(s.capacity?.totalMemoryGb, 128)
     }
 
+    func testDecodesSystemAndGPUCache() throws {
+        let json = """
+        {
+          "pid": 1, "version": "0.6.5", "written_at": 100.0, "started_at": 50.0,
+          "capacity": {"gpu_memory_active_gb": 11.4, "gpu_memory_cache_gb": 2.5, "total_memory_gb": 128},
+          "system": {"memory_pressure": 0.39, "cpu_usage": 0.15, "thermal_state": "nominal"}
+        }
+        """.data(using: .utf8)!
+        let s = try DaemonState.decode(json)
+        XCTAssertEqual(s.capacity?.gpuMemoryCacheGb, 2.5)
+        XCTAssertEqual(s.system?.thermalState, "nominal")
+        XCTAssertEqual(s.system?.cpuUsage, 0.15)
+        XCTAssertEqual(s.system?.memoryPressure, 0.39)
+    }
+
     func testOptionalFieldsAbsent() throws {
         let minimal = """
         {"pid": 1, "version": "0.1.0", "written_at": 100.0, "started_at": 50.0}

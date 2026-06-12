@@ -113,39 +113,51 @@ struct MenuView: View {
 
     // MARK: This Mac
 
+    private var thisMacLive: CoordinatorAPI.AttestedProvider? {
+        state.fleet.first(where: \.isThisMac)?.live
+    }
+
+    /// Most recent paid job from this machine's current session, for the
+    /// earning/idle activity line.
+    private var lastJobHere: Date? {
+        guard let id = thisMacLive?.providerID else { return nil }
+        return state.earnings?.earnings.first { $0.providerID == id }?.createdAt
+    }
+
     @ViewBuilder
     private var thisMacSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionLabel("This Mac")
             if let d = state.daemon, state.status != .stopped {
                 VStack(alignment: .leading, spacing: 5) {
-                    if let model = d.currentModel {
-                        row("Serving", model, mono: true)
+                    if let hw = thisMacLive {
+                        HStack(spacing: 4) {
+                            Text("\(hw.hardwareModel) · \(hw.memoryGB) GB · \(hw.gpuCores) GPU")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Image(systemName: hw.trustLevel == "hardware" ? "checkmark.shield.fill" : "shield")
+                                .font(.system(size: 9))
+                                .foregroundStyle(hw.trustLevel == "hardware" ? .green : .orange)
+                            Text(hw.trustLevel)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    if let warm = d.warmModels, warm.count > 1 || (warm.count == 1 && warm.first != d.currentModel) {
-                        row("Warm", warm.joined(separator: ", "), mono: true)
-                    }
+                    activityLine
+                    catalogChips(d)
                     if let s = d.stats {
                         row("Requests (session)", Fmt.count(s.requestsServed))
                         row("Tokens (session)", Fmt.count(s.tokensGenerated))
                     }
                     if let c = d.capacity {
-                        row("GPU memory", String(format: "%.1f / %.0f GB", c.gpuMemoryActiveGb, c.totalMemoryGb))
+                        row("GPU memory", gpuMemoryText(c))
+                    }
+                    if let sys = d.system {
+                        if let t = sys.thermalState { row("Thermal", t.capitalized) }
+                        if let cpu = sys.cpuUsage { row("CPU", percentText(cpu)) }
+                        if let mem = sys.memoryPressure { row("Memory pressure", percentText(mem)) }
                     }
                     row("Uptime", Fmt.uptime(d.uptime()))
-                    if let t = d.trust {
-                        HStack(spacing: 4) {
-                            Text("Trust")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 105, alignment: .leading)
-                            Image(systemName: t.trustLevel == "hardware" ? "checkmark.shield.fill" : "shield")
-                                .font(.system(size: 10))
-                                .foregroundStyle(t.trustLevel == "hardware" ? .green : .orange)
-                            Text(t.trustLevel)
-                                .font(.system(size: 11))
-                        }
-                    }
                     Text("Session stats reset when the provider restarts.")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
@@ -157,6 +169,69 @@ struct MenuView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var activityLine: some View {
+        if state.status == .serving {
+            let earning = state.daemon?.inferenceActive == true
+                || (lastJobHere.map { Date().timeIntervalSince($0) < 600 } ?? false)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(earning ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                Text(earning ? "Earning — receiving traffic" : "Online — waiting for jobs")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(earning ? Color.green : Color.secondary)
+                if let last = lastJobHere {
+                    Text("last job \(Fmt.ago(last))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.vertical, 1)
+        }
+    }
+
+    /// The models this Mac is serving (from the LaunchAgent plist), with the
+    /// one currently loaded in GPU memory highlighted.
+    @ViewBuilder
+    private func catalogChips(_ d: DaemonState) -> some View {
+        let models = state.currentModels.isEmpty ? (thisMacLive?.models ?? []) : state.currentModels
+        if !models.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Catalog (\(models.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 105, alignment: .leading)
+                HStack(spacing: 4) {
+                    ForEach(models, id: \.self) { id in
+                        let loaded = id == d.currentModel || (d.warmModels?.contains(id) ?? false)
+                        Text(id)
+                            .font(.system(size: 9, design: .monospaced))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(loaded ? Color.green.opacity(0.18) : Color.secondary.opacity(0.12),
+                                        in: Capsule())
+                            .overlay(Capsule().strokeBorder(
+                                loaded ? Color.green.opacity(0.6) : .clear, lineWidth: 1))
+                            .help(loaded ? "Loaded in GPU memory" : "Served — loads on demand")
+                    }
+                }
+            }
+        }
+    }
+
+    private func gpuMemoryText(_ c: DaemonState.Capacity) -> String {
+        if let cache = c.gpuMemoryCacheGb {
+            return String(format: "%.1f active · %.1f cache · %.0f GB",
+                          c.gpuMemoryActiveGb, cache, c.totalMemoryGb)
+        }
+        return String(format: "%.1f / %.0f GB", c.gpuMemoryActiveGb, c.totalMemoryGb)
+    }
+
+    private func percentText(_ v: Double) -> String {
+        String(format: "%.0f%%", v <= 1 ? v * 100 : v)
     }
 
     // MARK: Fleet
