@@ -11,6 +11,9 @@ jobs:
   release:
     name: Build, sign & publish
     runs-on: macos-15
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,7 +23,7 @@ jobs:
         run: swift test
 
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        if: ${{ env.HAS_CERT == 'true' }}
         env:
           CERT_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -45,7 +48,7 @@ jobs:
           VERSION="${VERSION_TAG#v}" SIGN_IDENTITY="${SIGN_IDENTITY:--}" ./scripts/build-app.sh
 
       - name: Notarize
-        if: ${{ env.SIGN_IDENTITY != '' && secrets.NOTARY_APPLE_ID != '' }}
+        if: ${{ env.SIGN_IDENTITY != '' && env.HAS_NOTARY == 'true' }}
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
