@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign & publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for the changelog
+
+      - name: Test
+        run: swift test
+
+      - name: Import Developer ID certificate
+        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN
+          security default-keychain -s $KEYCHAIN
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN
+          security set-keychain-settings -t 3600 -u $KEYCHAIN
+          security import cert.p12 -k $KEYCHAIN -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN
+          rm cert.p12
+          IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build app
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION_TAG#v}" SIGN_IDENTITY="${SIGN_IDENTITY:--}" ./scripts/build-app.sh
+
+      - name: Notarize
+        if: ${{ env.SIGN_IDENTITY != '' && secrets.NOTARY_APPLE_ID != '' }}
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent "dist/Darkbloom Monitor.app" notarize.zip
+          xcrun notarytool submit notarize.zip --wait \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun stapler staple "dist/Darkbloom Monitor.app"
+
+      - name: Package .dmg
+        run: ./scripts/make-dmg.sh "dist/Darkbloom-Monitor-${{ github.ref_name }}.dmg"
+
+      - name: Changelog from conventional commits
+        id: changelog
+        run: |
+          PREV=$(git tag -l 'v*' --sort=-v:refname | sed -n 2p)
+          RANGE=${PREV:+$PREV..}${{ github.ref_name }}
+          {
+            echo "## What's changed"
+            echo
+            section() { # title, grep pattern
+              local lines
+              lines=$(git log --no-merges --format='%s' "$RANGE" | grep -E "$2" | sed -E 's/^[a-z]+(\([^)]*\))?!?: /- /' || true)
+              if [ -n "$lines" ]; then echo "### $1"; echo "$lines"; echo; fi
+            }
+            section "Features"      '^feat(\(|!|:)'
+            section "Fixes"         '^fix(\(|!|:)'
+            section "Performance"   '^perf(\(|!|:)'
+            section "Documentation" '^docs(\(|!|:)'
+            section "Maintenance"   '^(chore|refactor|test|build|ci)(\(|!|:)'
+            other=$(git log --no-merges --format='%s' "$RANGE" | grep -vE '^(feat|fix|perf|docs|chore|refactor|test|build|ci)(\(|!|:)' | sed 's/^/- /' || true)
+            if [ -n "$other" ]; then echo "### Other"; echo "$other"; echo; fi
+            if [ -n "$PREV" ]; then
+              echo "**Full diff**: [\`$PREV...${{ github.ref_name }}\`](https://github.com/${{ github.repository }}/compare/$PREV...${{ github.ref_name }})"
+            fi
+            if [ -z "${SIGN_IDENTITY:-}" ]; then
+              echo
+              echo "> [!NOTE]"
+              echo "> This build is ad-hoc signed. Right-click → Open on first launch,"
+              echo "> or clear quarantine: \`xattr -d com.apple.quarantine '/Applications/Darkbloom Monitor.app'\`"
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "dist/Darkbloom-Monitor-${{ github.ref_name }}.dmg" \
+            --title "Darkbloom Monitor ${{ github.ref_name }}" \
+            --notes-file release-notes.md

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Test
+        run: swift test
+
+      - name: Bundle app (ad-hoc)
+        run: ./scripts/build-app.sh
+
+      - name: Verify bundle launches headlessly
+        run: |
+          codesign --verify --deep --strict "dist/Darkbloom Monitor.app"
+          plutil -lint "dist/Darkbloom Monitor.app/Contents/Info.plist"
