@@ -99,6 +99,29 @@ public struct CoordinatorAPI {
         }
     }
 
+    public struct CatalogModel: Decodable, Identifiable, Equatable {
+        public var id: String
+        public var displayName: String
+        public var minRamGB: Double?
+        public var sizeGB: Double?
+        public var active: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case id, active
+            case displayName = "display_name"
+            case minRamGB = "min_ram_gb"
+            case sizeGB = "size_gb"
+        }
+
+        public init(id: String, displayName: String, minRamGB: Double?, sizeGB: Double?, active: Bool?) {
+            self.id = id
+            self.displayName = displayName
+            self.minRamGB = minRamGB
+            self.sizeGB = sizeGB
+            self.active = active
+        }
+    }
+
     public enum APIError: LocalizedError {
         case noToken
         case unauthorized
@@ -147,6 +170,19 @@ public struct CoordinatorAPI {
         return try decoder().decode(Wrapper.self, from: data).providers.compactMap(\.value)
     }
 
+    /// Active catalog entries, in the coordinator's order. Entries that fail
+    /// to decode are dropped rather than failing the whole list.
+    public static func decodeCatalog(_ data: Data) throws -> [CatalogModel] {
+        struct Lossy: Decodable {
+            var value: CatalogModel?
+            init(from d: Decoder) throws { value = try? CatalogModel(from: d) }
+        }
+        struct Wrapper: Decodable { var models: [Lossy] }
+        return try decoder().decode(Wrapper.self, from: data).models
+            .compactMap(\.value)
+            .filter { $0.active ?? true }
+    }
+
     // MARK: - Network
 
     private static func get(_ path: String, query: [URLQueryItem] = [], token: String? = nil) async throws -> Data {
@@ -176,5 +212,11 @@ public struct CoordinatorAPI {
     /// account's provider IDs.
     public static func connectedProviders() async throws -> [AttestedProvider] {
         try decodeProviders(await get("/v1/providers/attestation"))
+    }
+
+    /// GET /v1/models/catalog — the same public catalog the CLI's model
+    /// picker shows (display names, sizes, RAM requirements).
+    public static func modelCatalog() async throws -> [CatalogModel] {
+        try decodeCatalog(await get("/v1/models/catalog"))
     }
 }

@@ -12,6 +12,8 @@ private struct ContentHeightKey: PreferenceKey {
 struct MenuView: View {
     @ObservedObject var state: AppState
     @State private var contentHeight: CGFloat = 100
+    @State private var pickerOpen = false
+    @State private var selectedModels: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -45,6 +47,9 @@ struct MenuView: View {
             footer
         }
         .frame(width: 340)
+        // The panel view persists across dismissals; don't leave a stale
+        // picker open the next time the dropdown appears.
+        .onDisappear { pickerOpen = false }
     }
 
     // MARK: Header
@@ -242,8 +247,106 @@ struct MenuView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 7)
             }
-            footerControls
+            if pickerOpen {
+                modelPicker
+            } else {
+                footerControls
+            }
         }
+    }
+
+    // MARK: Model picker (Restart)
+
+    /// Catalog models plus anything currently served that the catalog no
+    /// longer lists, so a restart can't silently drop a model.
+    private var pickerModels: [CoordinatorAPI.CatalogModel] {
+        var models = state.catalog
+        let known = Set(models.map(\.id))
+        for id in state.currentModels where !known.contains(id) {
+            models.append(.init(id: id, displayName: id, minRamGB: nil, sizeGB: nil, active: true))
+        }
+        return models
+    }
+
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("RESTART SERVING")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            if pickerModels.isEmpty {
+                Text("Couldn't load the model catalog.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(pickerModels) { model in
+                modelRow(model)
+            }
+            HStack(spacing: 8) {
+                Button("Cancel") { pickerOpen = false }
+                Spacer()
+                Button {
+                    pickerOpen = false
+                    state.restartServing(models: pickerModels.map(\.id).filter(selectedModels.contains))
+                } label: {
+                    Label("Restart", systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedModels.isEmpty)
+            }
+            .controlSize(.small)
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    @ViewBuilder
+    private func modelRow(_ model: CoordinatorAPI.CatalogModel) -> some View {
+        let fits = (model.minRamGB ?? 0) <= state.physicalMemoryGB
+        let downloaded = state.downloadedModels.contains(model.id)
+        Button {
+            if selectedModels.contains(model.id) {
+                selectedModels.remove(model.id)
+            } else {
+                selectedModels.insert(model.id)
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: selectedModels.contains(model.id) ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 12))
+                    .foregroundStyle(selectedModels.contains(model.id) ? Color.green : Color.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(model.displayName)
+                        .font(.system(size: 12, weight: .medium))
+                    Text(modelCaption(model, fits: fits, downloaded: downloaded))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !downloaded, fits {
+                    Text("will download")
+                        .font(.system(size: 9))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.quaternary, in: Capsule())
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!fits)
+        .opacity(fits ? 1 : 0.4)
+    }
+
+    private func modelCaption(_ model: CoordinatorAPI.CatalogModel, fits: Bool, downloaded: Bool) -> String {
+        var parts: [String] = []
+        if let size = model.sizeGB { parts.append(String(format: "%.1f GB", size)) }
+        if let ram = model.minRamGB {
+            parts.append(fits ? String(format: "needs %.0f GB RAM", ram)
+                              : String(format: "needs %.0f GB RAM — too big for this Mac", ram))
+        }
+        if downloaded { parts.append("downloaded") }
+        return parts.isEmpty ? model.id : parts.joined(separator: " · ")
     }
 
     private var footerControls: some View {
@@ -261,7 +364,9 @@ struct MenuView: View {
                     Label("Stop", systemImage: "stop.fill")
                 }
                 Button {
-                    state.runControl("restart")
+                    selectedModels = Set(state.currentModels)
+                    pickerOpen = true
+                    Task { await state.refreshCatalog() }
                 } label: {
                     Label("Restart", systemImage: "arrow.clockwise")
                 }

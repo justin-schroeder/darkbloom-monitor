@@ -37,6 +37,11 @@ final class AppState: ObservableObject {
     @Published var remoteError: String?
     @Published var controlBusy = false
     @Published var controlError: String?
+    @Published var catalog: [CoordinatorAPI.CatalogModel] = []
+    @Published var currentModels: [String] = []
+    @Published var downloadedModels: Set<String> = []
+
+    let physicalMemoryGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
     private var localTimer: Timer?
     private var remoteTimer: Timer?
@@ -45,6 +50,7 @@ final class AppState: ObservableObject {
     func start() {
         refreshLocal()
         Task { await refreshRemote() }
+        Task { await refreshCatalog() }
         localTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshLocal() }
         }
@@ -86,20 +92,39 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Catalog + local download inventory + current selection, for the
+    /// restart model picker. Refreshed at launch and whenever the picker opens.
+    func refreshCatalog() async {
+        currentModels = LaunchAgentPlist.currentModels()
+        downloadedModels = LocalModels.downloadedIDs()
+        if let models = try? await CoordinatorAPI.modelCatalog() {
+            catalog = models
+        }
+    }
+
     // MARK: - Control (delegates to the darkbloom CLI / launchctl agent)
 
     func runControl(_ verb: String) {
+        // `darkbloom start` with no --model flags blocks on an interactive
+        // picker, so replay the models recorded in the LaunchAgent plist.
+        let args = verb == "start" ? AppState.startArguments() : [verb]
+        run(args, expectRunning: verb != "stop")
+    }
+
+    /// Restart serving exactly `models` — `darkbloom start --model …`
+    /// rewrites the LaunchAgent plist and relaunches the provider in place.
+    func restartServing(models: [String]) {
+        guard !models.isEmpty else { return }
+        run(["start"] + models.flatMap { ["--model", $0] }, expectRunning: true)
+    }
+
+    private func run(_ args: [String], expectRunning: Bool) {
         guard !controlBusy else { return }
         controlBusy = true
         controlError = nil
         Task {
-            // `darkbloom start` with no --model flags blocks on an interactive
-            // picker, so replay the models recorded in the LaunchAgent plist.
-            let args = verb == "start" ? AppState.startArguments() : [verb]
             await AppState.runCLI(args)
-            if verb == "stop" {
-                try? await Task.sleep(for: .seconds(2))
-            } else {
+            if expectRunning {
                 // Wait for the daemon to boot and write fresh state; the
                 // 3s poll timer takes over for the trust handshake.
                 for _ in 0..<15 {
@@ -110,28 +135,19 @@ final class AppState: ObservableObject {
                 if status == .stopped {
                     controlError = "Couldn't start — run `darkbloom start` in Terminal once."
                 }
+            } else {
+                try? await Task.sleep(for: .seconds(2))
             }
             controlBusy = false
             refreshLocal()
+            currentModels = LaunchAgentPlist.currentModels()
         }
     }
 
-    /// Models from the LaunchAgent plist written by the last `darkbloom start`;
-    /// it survives `stop`, so a UI start serves the same models the user picked.
     nonisolated private static func startArguments() -> [String] {
-        if let data = try? Data(contentsOf: DarkbloomPaths.launchAgentPlist),
-           let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-           let args = dict["ProgramArguments"] as? [String] {
-            var models: [String] = []
-            var i = 0
-            while i < args.count - 1 {
-                if args[i] == "--model" { models.append(args[i + 1]); i += 2 } else { i += 1 }
-            }
-            if !models.isEmpty {
-                return ["start"] + models.flatMap { ["--model", $0] }
-            }
-        }
-        return ["restart"]
+        let models = LaunchAgentPlist.currentModels()
+        guard !models.isEmpty else { return ["restart"] }
+        return ["start"] + models.flatMap { ["--model", $0] }
     }
 
     nonisolated private static func runCLI(_ args: [String]) async {
