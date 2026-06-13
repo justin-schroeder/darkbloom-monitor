@@ -113,12 +113,14 @@ final class AppState: ObservableObject {
 
     /// Restart serving exactly `models` — `darkbloom start --model …`
     /// rewrites the LaunchAgent plist and relaunches the provider in place.
-    func restartServing(models: [String]) {
+    func restartServing(models: [String], prewarm: Bool) {
         guard !models.isEmpty else { return }
-        run(["start"] + models.flatMap { ["--model", $0] }, expectRunning: true)
+        run(["start"] + models.flatMap { ["--model", $0] },
+            expectRunning: true,
+            prewarmModels: prewarm ? models : [])
     }
 
-    private func run(_ args: [String], expectRunning: Bool) {
+    private func run(_ args: [String], expectRunning: Bool, prewarmModels: [String] = []) {
         guard !controlBusy else { return }
         controlBusy = true
         controlError = nil
@@ -126,14 +128,20 @@ final class AppState: ObservableObject {
             await AppState.runCLI(args)
             if expectRunning {
                 // Wait for the daemon to boot and write fresh state; the
-                // 3s poll timer takes over for the trust handshake.
+                // 3s poll timer takes over after the startup/warmup window.
                 for _ in 0..<15 {
                     try? await Task.sleep(for: .seconds(2))
                     refreshLocal()
-                    if status != .stopped { break }
+                    if prewarmModels.isEmpty {
+                        if status != .stopped { break }
+                    } else if status == .serving {
+                        break
+                    }
                 }
                 if status == .stopped {
                     controlError = "Couldn't start — run `darkbloom start` in Terminal once."
+                } else if !prewarmModels.isEmpty {
+                    await prewarm(models: prewarmModels)
                 }
             } else {
                 try? await Task.sleep(for: .seconds(2))
@@ -141,6 +149,18 @@ final class AppState: ObservableObject {
             controlBusy = false
             refreshLocal()
             currentModels = LaunchAgentPlist.currentModels()
+        }
+    }
+
+    private func prewarm(models: [String]) async {
+        guard let localSerial else {
+            controlError = "Couldn't pre-warm — machine serial unavailable."
+            return
+        }
+        do {
+            try await CoordinatorAPI.warmupMachine(serialNumber: localSerial, models: models)
+        } catch {
+            controlError = "Pre-warm failed — \(error.localizedDescription)"
         }
     }
 

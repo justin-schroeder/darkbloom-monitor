@@ -14,6 +14,7 @@ struct MenuView: View {
     @State private var contentHeight: CGFloat = 100
     @State private var pickerOpen = false
     @State private var selectedModels: Set<String> = []
+    @State private var prewarmAfterRestart = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -356,12 +357,17 @@ struct MenuView: View {
             ForEach(pickerModels) { model in
                 modelRow(model)
             }
+            Toggle("Pre-warm each model", isOn: $prewarmAfterRestart)
+                .font(.system(size: 11))
+                .toggleStyle(.checkbox)
+                .padding(.top, 2)
             HStack(spacing: 8) {
                 Button("Cancel") { pickerOpen = false }
                 Spacer()
                 Button {
                     pickerOpen = false
-                    state.restartServing(models: pickerModels.map(\.id).filter(selectedModels.contains))
+                    state.restartServing(models: pickerModels.map(\.id).filter(selectedModels.contains),
+                                         prewarm: prewarmAfterRestart)
                 } label: {
                     Label("Restart", systemImage: "arrow.clockwise")
                 }

@@ -136,6 +136,23 @@ public struct CoordinatorAPI {
         }
     }
 
+    struct ChatMessage: Encodable {
+        var role: String
+        var content: String
+    }
+
+    struct WarmupRequestBody: Encodable {
+        var model: String
+        var messages: [ChatMessage]
+        var stream: Bool
+        var providerSerial: String
+
+        enum CodingKeys: String, CodingKey {
+            case model, messages, stream
+            case providerSerial = "provider_serial"
+        }
+    }
+
     // MARK: - Decoding (pure, tested)
 
     static func decoder() -> JSONDecoder {
@@ -197,6 +214,30 @@ public struct CoordinatorAPI {
         return data
     }
 
+    static func warmupRequest(serialNumber: String, model: String, token: String) throws -> URLRequest {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("/v1/chat/completions"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [.init(name: "serial", value: serialNumber)]
+        var req = URLRequest(url: comps.url!, timeoutInterval: 30)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONEncoder().encode(WarmupRequestBody(
+            model: model,
+            messages: [.init(role: "user", content: "Hello")],
+            stream: false,
+            providerSerial: serialNumber
+        ))
+        return req
+    }
+
+    private static func send(_ request: URLRequest) async throws {
+        let (_, resp) = try await URLSession.shared.data(for: request)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401 || code == 403 { throw APIError.unauthorized }
+        guard (200..<300).contains(code) else { throw APIError.http(code) }
+    }
+
     /// GET /v1/provider/account-earnings — lifetime totals, balance, and recent
     /// per-job history for the account the CLI token belongs to. Server caches 20s.
     public static func accountEarnings(limit: Int = 1000) async throws -> AccountEarnings {
@@ -218,5 +259,14 @@ public struct CoordinatorAPI {
     /// picker shows (display names, sizes, RAM requirements).
     public static func modelCatalog() async throws -> [CatalogModel] {
         try decodeCatalog(await get("/v1/models/catalog"))
+    }
+
+    /// POST /v1/chat/completions once per model, pinned to this Mac's serial,
+    /// so the provider loads each selected model after restart.
+    public static func warmupMachine(serialNumber: String, models: [String]) async throws {
+        guard let token = DarkbloomPaths.readAuthToken() else { throw APIError.noToken }
+        for model in models {
+            try await send(warmupRequest(serialNumber: serialNumber, model: model, token: token))
+        }
     }
 }

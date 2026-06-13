@@ -85,4 +85,27 @@ final class CoordinatorAPITests: XCTestCase {
         XCTAssertEqual(list.count, 1)
         XCTAssertEqual(list[0].providerID, "p1")
     }
+
+    func testWarmupRequestTargetsSerialAndModel() throws {
+        let req = try CoordinatorAPI.warmupRequest(
+            serialNumber: "SER1",
+            model: "gemma-4-26b",
+            token: "tok"
+        )
+
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(req.url?.path, "/v1/chat/completions")
+        XCTAssertEqual(URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "serial" })?.value, "SER1")
+
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "gemma-4-26b")
+        XCTAssertEqual(json["stream"] as? Bool, false)
+        XCTAssertEqual(json["provider_serial"] as? String, "SER1")
+        let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+        XCTAssertEqual(messages, [["role": "user", "content": "Hello"]])
+    }
 }
