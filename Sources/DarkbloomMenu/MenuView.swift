@@ -384,27 +384,52 @@ struct MenuView: View {
     private func catalogChips(_ d: DaemonState) -> some View {
         let models = state.currentModels.isEmpty ? (thisMacLive?.models ?? []) : state.currentModels
         if !models.isEmpty {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Catalog (\(models.count))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .frame(width: 105, alignment: .leading)
-                HStack(spacing: 4) {
+                LazyVGrid(columns: catalogGridColumns, alignment: .leading, spacing: 5) {
                     ForEach(models, id: \.self) { id in
-                        let loaded = id == d.currentModel || (d.warmModels?.contains(id) ?? false)
-                        Text(id)
-                            .font(.system(size: 9, design: .monospaced))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(loaded ? Color.green.opacity(0.18) : Color.secondary.opacity(0.12),
-                                        in: Capsule())
-                            .overlay(Capsule().strokeBorder(
-                                loaded ? Color.green.opacity(0.6) : .clear, lineWidth: 1))
-                            .help(loaded ? "Loaded in GPU memory" : "Served — loads on demand")
+                        catalogModelPill(
+                            id,
+                            loaded: id == d.currentModel || (d.warmModels?.contains(id) ?? false)
+                        )
                     }
                 }
             }
         }
+    }
+
+    private var catalogGridColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 0), spacing: 6),
+            GridItem(.flexible(minimum: 0), spacing: 6)
+        ]
+    }
+
+    private func catalogModelPill(_ id: String, loaded: Bool) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(loaded ? Color.green : Color.secondary.opacity(0.45))
+                .frame(width: 5, height: 5)
+            Text(id)
+                .font(.system(size: 9, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            loaded ? Color.green.opacity(0.16) : Color.secondary.opacity(0.10),
+            in: RoundedRectangle(cornerRadius: 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(loaded ? Color.green.opacity(0.55) : Color.secondary.opacity(0.14), lineWidth: 1)
+        )
+        .help(loaded ? "\(id) is loaded in GPU memory" : "\(id) is served on demand")
     }
 
     private func gpuMemoryText(_ c: DaemonState.Capacity) -> String {
