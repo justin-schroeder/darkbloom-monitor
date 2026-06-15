@@ -12,7 +12,7 @@ tells you everything else.
 [![Release](https://img.shields.io/github/v/release/justin-schroeder/darkbloom-monitor?display_name=tag&sort=semver)](https://github.com/justin-schroeder/darkbloom-monitor/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
-<img src="docs/screenshot.png" width="386" alt="Darkbloom Monitor dropdown showing earnings, provider status, hardware metrics, and an hourly jobs chart">
+<img src="docs/screenshot-v1.1.0.png" width="386" alt="Darkbloom Monitor dropdown showing earnings, provider status, hardware metrics, and an hourly jobs chart">
 
 </div>
 
