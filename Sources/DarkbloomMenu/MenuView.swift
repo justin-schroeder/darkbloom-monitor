@@ -36,8 +36,12 @@ private enum ServingPickerIntent {
 }
 
 struct MenuView: View {
+    private static let menuWidth: CGFloat = 340
+    private static let minimumScrollHeight: CGFloat = 385
+    private static let maximumScrollHeight: CGFloat = 640
+
     @ObservedObject var state: AppState
-    @State private var contentHeight: CGFloat = 100
+    @State private var contentHeight: CGFloat = minimumScrollHeight
     @State private var pickerOpen = false
     @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
@@ -49,8 +53,9 @@ struct MenuView: View {
             Divider().padding(.horizontal, 12)
             // The MenuBarExtra panel sizes to the view's ideal height, and a
             // bare ScrollView's ideal height is zero — so measure the content
-            // and give the scroll region an explicit height, capped high
-            // enough for the full dropdown to avoid an always-visible scroller.
+            // and give the scroll region an explicit height. Keep a stable
+            // baseline while startup data is sparse so the panel never opens
+            // as a clipped half-height window.
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     earningsSection
@@ -64,21 +69,28 @@ struct MenuView: View {
                     }
                 }
                 .padding(12)
+                .frame(maxWidth: .infinity, minHeight: Self.minimumScrollHeight, alignment: .topLeading)
                 .background(
                     GeometryReader { g in
                         Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
                     }
                 )
             }
-            .frame(height: min(contentHeight, 640))
-            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+            .frame(height: scrollHeight)
+            .onPreferenceChange(ContentHeightKey.self) {
+                contentHeight = max($0, Self.minimumScrollHeight)
+            }
             Divider().padding(.horizontal, 12)
             footer
         }
-        .frame(width: 340)
+        .frame(width: Self.menuWidth)
         // The panel view persists across dismissals; don't leave a stale
         // picker open the next time the dropdown appears.
         .onDisappear { pickerOpen = false }
+    }
+
+    private var scrollHeight: CGFloat {
+        min(max(contentHeight, Self.minimumScrollHeight), Self.maximumScrollHeight)
     }
 
     // MARK: Header
