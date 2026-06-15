@@ -12,7 +12,7 @@ tells you everything else.
 [![Release](https://img.shields.io/github/v/release/justin-schroeder/darkbloom-monitor?display_name=tag&sort=semver)](https://github.com/justin-schroeder/darkbloom-monitor/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
-<img src="docs/screenshot.png" width="340" alt="Darkbloom Monitor dropdown showing earnings, provider status, and an hourly jobs chart">
+<img src="docs/screenshot.png" width="386" alt="Darkbloom Monitor dropdown showing earnings, provider status, hardware metrics, and an hourly jobs chart">
 
 </div>
 
@@ -27,6 +27,7 @@ Click it for the rest:
   straight from the Darkbloom coordinator
 - 🖥️ **This Mac** — the model being served, requests and tokens this
   session, GPU memory, uptime, and trust level
+- 🌡️ **Hardware metrics** — memory use, fan speed, and CPU / GPU temperatures
 - 📊 **Jobs chart** — paid inference jobs per hour over the last 24 hours
 - 💻 **My Macs** — appears when more than one of your machines is online,
   with the models each is serving
