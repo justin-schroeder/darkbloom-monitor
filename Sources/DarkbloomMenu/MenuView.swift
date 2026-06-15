@@ -9,10 +9,37 @@ private struct ContentHeightKey: PreferenceKey {
     }
 }
 
+private enum ServingPickerIntent {
+    case start
+    case restart
+
+    var title: String {
+        switch self {
+        case .start: return "START SERVING"
+        case .restart: return "RESTART SERVING"
+        }
+    }
+
+    var actionLabel: String {
+        switch self {
+        case .start: return "Start"
+        case .restart: return "Restart"
+        }
+    }
+
+    var actionIcon: String {
+        switch self {
+        case .start: return "play.fill"
+        case .restart: return "arrow.clockwise"
+        }
+    }
+}
+
 struct MenuView: View {
     @ObservedObject var state: AppState
     @State private var contentHeight: CGFloat = 100
     @State private var pickerOpen = false
+    @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
     @State private var prewarmAfterRestart = true
 
@@ -22,7 +49,8 @@ struct MenuView: View {
             Divider().padding(.horizontal, 12)
             // The MenuBarExtra panel sizes to the view's ideal height, and a
             // bare ScrollView's ideal height is zero — so measure the content
-            // and give the scroll region an explicit height, capped at 460.
+            // and give the scroll region an explicit height, capped high
+            // enough for the full dropdown to avoid an always-visible scroller.
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     earningsSection
@@ -42,7 +70,7 @@ struct MenuView: View {
                     }
                 )
             }
-            .frame(height: min(contentHeight, 460))
+            .frame(height: min(contentHeight, 640))
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             Divider().padding(.horizontal, 12)
             footer
@@ -145,6 +173,7 @@ struct MenuView: View {
                         }
                     }
                     activityLine
+                    hardwareHealthSection
                     catalogChips(d)
                     if let s = d.stats {
                         row("Requests (session)", Fmt.count(s.requestsServed))
@@ -155,7 +184,7 @@ struct MenuView: View {
                     }
                     if let sys = d.system {
                         if let t = sys.thermalState { row("Thermal", t.capitalized) }
-                        if let cpu = sys.cpuUsage { row("CPU", percentText(cpu)) }
+                        if let cpu = sys.cpuUsage { row("CPU load", percentText(cpu)) }
                         if let mem = sys.memoryPressure { row("Memory pressure", percentText(mem)) }
                     }
                     row("Uptime", Fmt.uptime(d.uptime()))
@@ -192,6 +221,149 @@ struct MenuView: View {
             }
             .padding(.vertical, 1)
         }
+    }
+
+    private var hardwareHealthSection: some View {
+        let metrics = state.hardwareMetrics
+        return HStack(alignment: .top, spacing: 6) {
+            hardwareMetricCard(
+                title: "Memory",
+                systemImage: "memorychip",
+                value: memoryUtilizationText(metrics.memoryUsedFraction),
+                detail: "used",
+                tint: .blue,
+                fraction: metrics.memoryUsedFraction
+            )
+            hardwareMetricCard(
+                title: "Fans",
+                systemImage: "fanblades",
+                value: fanSpeedText(metrics.fanRPMs),
+                detail: fanDetailText(metrics.fanRPMs),
+                tint: .orange,
+                fraction: fanSpeedFraction(metrics.fanRPMs)
+            )
+            temperatureMetricCard(metrics)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func hardwareMetricCard(
+        title: String,
+        systemImage: String,
+        value: String,
+        detail: String,
+        tint: Color,
+        fraction: Double?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            metricBar(fraction: fraction, tint: tint)
+            Text(detail)
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func temperatureMetricCard(_ metrics: HardwareMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.red)
+                Text("Temps")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            tempRow("CPU", metrics.averageCPUTempC, tint: .red)
+            tempRow("GPU", metrics.averageGPUTempC, tint: .purple)
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.red.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func tempRow(_ label: String, _ value: Double?, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .leading)
+            metricBar(fraction: value.map { $0 / 100 }, tint: tint)
+            Text(temperatureText(value))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(width: 28, alignment: .trailing)
+        }
+    }
+
+    private func metricBar(fraction: Double?, tint: Color) -> some View {
+        let clamped = min(max(fraction ?? 0, 0), 1)
+        return GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule()
+                    .fill(tint.opacity(fraction == nil ? 0 : 0.75))
+                    .frame(width: proxy.size.width * clamped)
+            }
+        }
+        .frame(height: 4)
+    }
+
+    private func memoryUtilizationText(_ fraction: Double?) -> String {
+        guard let fraction else { return "—" }
+        return String(format: "%.0f%%", fraction * 100)
+    }
+
+    private func fanSpeedText(_ rpms: [Double]) -> String {
+        guard !rpms.isEmpty else { return "—" }
+        let rpm = rpms.reduce(0, +) / Double(rpms.count)
+        return "\(Int(rpm.rounded())) rpm"
+    }
+
+    private func fanDetailText(_ rpms: [Double]) -> String {
+        switch rpms.count {
+        case 0: return "unavailable"
+        case 1: return "1 fan"
+        default: return "\(rpms.count) fans avg"
+        }
+    }
+
+    private func fanSpeedFraction(_ rpms: [Double]) -> Double? {
+        guard !rpms.isEmpty else { return nil }
+        let rpm = rpms.reduce(0, +) / Double(rpms.count)
+        return rpm / 6_000
+    }
+
+    private func temperatureText(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.0f°", value)
     }
 
     /// The models this Mac is serving (from the LaunchAgent plist), with the
@@ -331,7 +503,7 @@ struct MenuView: View {
         }
     }
 
-    // MARK: Model picker (Restart)
+    // MARK: Model picker (Start / Restart)
 
     /// Catalog models plus anything currently served that the catalog no
     /// longer lists, so a restart can't silently drop a model.
@@ -346,7 +518,7 @@ struct MenuView: View {
 
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("RESTART SERVING")
+            Text(pickerIntent.title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
             if pickerModels.isEmpty {
@@ -366,10 +538,10 @@ struct MenuView: View {
                 Spacer()
                 Button {
                     pickerOpen = false
-                    state.restartServing(models: pickerModels.map(\.id).filter(selectedModels.contains),
-                                         prewarm: prewarmAfterRestart)
+                    state.startServing(models: pickerModels.map(\.id).filter(selectedModels.contains),
+                                       prewarm: prewarmAfterRestart)
                 } label: {
-                    Label("Restart", systemImage: "arrow.clockwise")
+                    Label(pickerIntent.actionLabel, systemImage: pickerIntent.actionIcon)
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedModels.isEmpty)
@@ -434,7 +606,7 @@ struct MenuView: View {
         HStack(spacing: 8) {
             if state.status == .stopped {
                 Button {
-                    state.runControl("start")
+                    openServingPicker(.start)
                 } label: {
                     Label("Start", systemImage: "play.fill")
                 }
@@ -445,9 +617,7 @@ struct MenuView: View {
                     Label("Stop", systemImage: "stop.fill")
                 }
                 Button {
-                    selectedModels = Set(state.currentModels)
-                    pickerOpen = true
-                    Task { await state.refreshCatalog() }
+                    openServingPicker(.restart)
                 } label: {
                     Label("Restart", systemImage: "arrow.clockwise")
                 }
@@ -470,6 +640,18 @@ struct MenuView: View {
         .disabled(state.controlBusy)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+    }
+
+    private func openServingPicker(_ intent: ServingPickerIntent) {
+        pickerIntent = intent
+        selectedModels = Set(state.currentModels)
+        pickerOpen = true
+        Task {
+            await state.refreshCatalog()
+            if selectedModels.isEmpty {
+                selectedModels = Set(state.currentModels)
+            }
+        }
     }
 
     // MARK: Bits

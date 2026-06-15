@@ -40,6 +40,7 @@ final class AppState: ObservableObject {
     @Published var catalog: [CoordinatorAPI.CatalogModel] = []
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
+    @Published var hardwareMetrics: HardwareMetrics = .empty
 
     let physicalMemoryGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
@@ -64,6 +65,7 @@ final class AppState: ObservableObject {
     // MARK: - Local state (daemon-state.json)
 
     func refreshLocal() {
+        hardwareMetrics = HardwareMetricsReader.snapshot()
         let state = DarkbloomPaths.readDaemonState()
         daemon = state
         guard let state, state.isFresh(), state.processAlive else {
@@ -111,9 +113,10 @@ final class AppState: ObservableObject {
         run(args, expectRunning: verb != "stop")
     }
 
-    /// Restart serving exactly `models` — `darkbloom start --model …`
-    /// rewrites the LaunchAgent plist and relaunches the provider in place.
-    func restartServing(models: [String], prewarm: Bool) {
+    /// Start serving exactly `models` — `darkbloom start --model …`
+    /// rewrites the LaunchAgent plist and relaunches the provider in place
+    /// when already running.
+    func startServing(models: [String], prewarm: Bool) {
         guard !models.isEmpty else { return }
         run(["start"] + models.flatMap { ["--model", $0] },
             expectRunning: true,
