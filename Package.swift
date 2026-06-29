@@ -6,13 +6,18 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "DarkbloomCore"),
+        .target(name: "DarkbloomMenuSupport"),
         .executableTarget(
             name: "DarkbloomMenu",
-            dependencies: ["DarkbloomCore"]
+            dependencies: ["DarkbloomCore", "DarkbloomMenuSupport"]
         ),
         .testTarget(
             name: "DarkbloomCoreTests",
             dependencies: ["DarkbloomCore"]
+        ),
+        .testTarget(
+            name: "DarkbloomMenuSupportTests",
+            dependencies: ["DarkbloomMenuSupport"]
         ),
     ]
 )

@@ -32,7 +32,7 @@ let logoPolygons: [[CGPoint]] = [
 func logoPath(fitting rect: CGRect) -> CGPath {
     let scale = min(rect.width / logoViewBox.width, rect.height / logoViewBox.height)
     let drawn = CGSize(width: logoViewBox.width * scale, height: logoViewBox.height * scale)
-    var transform = CGAffineTransform(
+    let transform = CGAffineTransform(
         translationX: rect.minX + (rect.width - drawn.width) / 2,
         y: rect.minY + (rect.height - drawn.height) / 2
     ).scaledBy(x: scale, y: scale)

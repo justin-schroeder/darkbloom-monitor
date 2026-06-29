@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import DarkbloomCore
 import Foundation
 import IOKit
@@ -47,13 +48,22 @@ final class AppState: ObservableObject {
     private var localTimer: Timer?
     private var remoteTimer: Timer?
     private let localSerial = AppState.machineSerialNumber()
+    private var lastFreshDaemon: DaemonState?
+    private var daemonReadMisses = 0
+    private var hardwareRefreshInFlight = false
+
+    private static let daemonReadMissTolerance = 2
 
     func start() {
         refreshLocal()
+        refreshHardwareMetrics()
         Task { await refreshRemote() }
         Task { await refreshCatalog() }
         localTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshLocal() }
+            Task { @MainActor in
+                self?.refreshLocal()
+                self?.refreshHardwareMetrics()
+            }
         }
         localTimer?.tolerance = 1
         remoteTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -65,15 +75,53 @@ final class AppState: ObservableObject {
     // MARK: - Local state (daemon-state.json)
 
     func refreshLocal() {
-        hardwareMetrics = HardwareMetricsReader.snapshot()
-        let state = DarkbloomPaths.readDaemonState()
-        daemon = state
-        guard let state, state.isFresh(), state.processAlive else {
+        let readState = DarkbloomPaths.readDaemonState()
+        let state = freshRunningState(from: readState)
+        daemon = state ?? readState
+        guard let state else {
             status = .stopped
             return
         }
         status = state.trust?.status == "online" ? .serving : .running
-        controlError = nil
+    }
+
+    func refreshModelSelection() {
+        currentModels = LaunchAgentPlist.currentModels()
+        downloadedModels = LocalModels.downloadedIDs()
+    }
+
+    private func refreshHardwareMetrics() {
+        guard !hardwareRefreshInFlight else { return }
+        hardwareRefreshInFlight = true
+        Task {
+            let metrics = await Task.detached(priority: .utility) {
+                HardwareMetricsReader.snapshot()
+            }.value
+            hardwareMetrics = metrics
+            hardwareRefreshInFlight = false
+        }
+    }
+
+    private func freshRunningState(from readState: DaemonState?) -> DaemonState? {
+        if let readState {
+            daemonReadMisses = 0
+            guard readState.isFresh(), readState.processAlive else {
+                lastFreshDaemon = nil
+                return nil
+            }
+            lastFreshDaemon = readState
+            return readState
+        }
+
+        guard daemonReadMisses < Self.daemonReadMissTolerance,
+              let lastFreshDaemon,
+              lastFreshDaemon.isFresh(),
+              lastFreshDaemon.processAlive else {
+            self.lastFreshDaemon = nil
+            return nil
+        }
+        daemonReadMisses += 1
+        return lastFreshDaemon
     }
 
     // MARK: - Coordinator data
@@ -83,22 +131,31 @@ final class AppState: ObservableObject {
             async let earningsTask = CoordinatorAPI.accountEarnings()
             async let connectedTask = CoordinatorAPI.connectedProviders()
             let acct = try await earningsTask
-            let connected = (try? await connectedTask) ?? []
+            let connected: [CoordinatorAPI.AttestedProvider]
+            do {
+                connected = try await connectedTask
+                remoteError = nil
+            } catch {
+                connected = []
+                remoteError = "Fleet unavailable — \(error.localizedDescription)"
+            }
             earnings = acct
-            remoteError = nil
             windows = EarningsMath.windows(acct.earnings)
             hourlyJobs = EarningsMath.hourlyBuckets(acct.earnings)
             fleet = Fleet.machines(connected: connected, earnings: acct.earnings, localSerial: localSerial)
         } catch {
             remoteError = error.localizedDescription
+            earnings = nil
+            windows = EarningsWindows()
+            hourlyJobs = []
+            fleet = []
         }
     }
 
     /// Catalog + local download inventory + current selection, for the
     /// restart model picker. Refreshed at launch and whenever the picker opens.
     func refreshCatalog() async {
-        currentModels = LaunchAgentPlist.currentModels()
-        downloadedModels = LocalModels.downloadedIDs()
+        refreshModelSelection()
         if let models = try? await CoordinatorAPI.modelCatalog() {
             catalog = models
         }
@@ -120,15 +177,29 @@ final class AppState: ObservableObject {
         guard !models.isEmpty else { return }
         run(["start"] + models.flatMap { ["--model", $0] },
             expectRunning: true,
+            requestedModels: models,
             prewarmModels: prewarm ? models : [])
     }
 
-    private func run(_ args: [String], expectRunning: Bool, prewarmModels: [String] = []) {
+    private func run(
+        _ args: [String],
+        expectRunning: Bool,
+        requestedModels: [String] = [],
+        prewarmModels: [String] = []
+    ) {
         guard !controlBusy else { return }
         controlBusy = true
         controlError = nil
         Task {
-            await AppState.runCLI(args)
+            let result = await AppState.runCLI(args)
+            guard result.succeeded else {
+                controlError = result.displayMessage(for: args)
+                controlBusy = false
+                refreshLocal()
+                currentModels = LaunchAgentPlist.currentModels()
+                return
+            }
+
             if expectRunning {
                 // Wait for the daemon to boot and write fresh state; the
                 // 3s poll timer takes over after the startup/warmup window.
@@ -143,11 +214,24 @@ final class AppState: ObservableObject {
                 }
                 if status == .stopped {
                     controlError = "Couldn't start — run `darkbloom start` in Terminal once."
-                } else if !prewarmModels.isEmpty {
+                }
+
+                currentModels = LaunchAgentPlist.currentModels()
+                if controlError == nil,
+                   !requestedModels.isEmpty,
+                   Set(currentModels) != Set(requestedModels) {
+                    controlError = "Couldn't update served models — check `darkbloom start` in Terminal."
+                }
+
+                if controlError == nil, !prewarmModels.isEmpty {
                     await prewarm(models: prewarmModels)
                 }
             } else {
                 try? await Task.sleep(for: .seconds(2))
+                refreshLocal()
+                if status != .stopped {
+                    controlError = "Couldn't stop — check `darkbloom stop` in Terminal."
+                }
             }
             controlBusy = false
             refreshLocal()
@@ -173,19 +257,31 @@ final class AppState: ObservableObject {
         return ["start"] + models.flatMap { ["--model", $0] }
     }
 
-    nonisolated private static func runCLI(_ args: [String]) async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+    nonisolated private static func runCLI(_ args: [String]) async -> CLIResult {
+        await withCheckedContinuation { (cont: CheckedContinuation<CLIResult, Never>) in
+            let execution = CLIExecution(continuation: cont)
             let proc = Process()
+            let stderr = Pipe()
             proc.executableURL = DarkbloomPaths.cli
             proc.arguments = args
             proc.standardOutput = FileHandle.nullDevice
-            proc.standardError = FileHandle.nullDevice
+            proc.standardError = stderr
             proc.standardInput = FileHandle.nullDevice
-            proc.terminationHandler = { _ in cont.resume() }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                execution.append(handle.availableData)
+            }
+            proc.terminationHandler = { process in
+                execution.finish(
+                    exitCode: process.terminationStatus,
+                    pipe: stderr,
+                    drainPipe: true
+                )
+            }
             do {
                 try proc.run()
+                execution.startTimeout(for: proc, args: args, pipe: stderr)
             } catch {
-                cont.resume()
+                execution.finish(exitCode: -1, message: error.localizedDescription, pipe: stderr)
             }
         }
     }
@@ -200,5 +296,97 @@ final class AppState: ObservableObject {
                   .takeRetainedValue() as? String
         else { return nil }
         return serial
+    }
+}
+
+private struct CLIResult {
+    var exitCode: Int32
+    var message: String?
+
+    var succeeded: Bool {
+        exitCode == 0
+    }
+
+    func displayMessage(for args: [String]) -> String {
+        let command = (["darkbloom"] + args).joined(separator: " ")
+        if let message, !message.isEmpty {
+            return "\(command) failed — \(message)"
+        }
+        return "\(command) failed with exit code \(exitCode)."
+    }
+}
+
+private final class CLIExecution: @unchecked Sendable {
+    private static let timeout: TimeInterval = 60
+    private static let terminationGrace: TimeInterval = 3
+
+    private let continuation: CheckedContinuation<CLIResult, Never>
+    private let lock = NSLock()
+    private var stderrData = Data()
+    private var finished = false
+
+    init(continuation: CheckedContinuation<CLIResult, Never>) {
+        self.continuation = continuation
+    }
+
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        if !finished {
+            stderrData.append(data)
+        }
+        lock.unlock()
+    }
+
+    func startTimeout(for process: Process, args: [String], pipe: Pipe) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.timeout) { [weak self] in
+            guard let self else { return }
+            guard process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.terminationGrace) {
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
+            }
+
+            let command = (["darkbloom"] + args).joined(separator: " ")
+            self.finish(
+                exitCode: -2,
+                message: "\(command) timed out after \(Int(Self.timeout)) seconds.",
+                pipe: pipe
+            )
+        }
+    }
+
+    func finish(
+        exitCode: Int32,
+        message: String? = nil,
+        pipe: Pipe,
+        drainPipe: Bool = false
+    ) {
+        pipe.fileHandleForReading.readabilityHandler = nil
+        if drainPipe {
+            append(pipe.fileHandleForReading.readDataToEndOfFile())
+        }
+        resume(exitCode: exitCode, message: message ?? stderrMessage())
+    }
+
+    private func stderrMessage() -> String? {
+        lock.lock()
+        let data = stderrData
+        lock.unlock()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func resume(exitCode: Int32, message: String?) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        lock.unlock()
+        continuation.resume(returning: CLIResult(exitCode: exitCode, message: message))
     }
 }

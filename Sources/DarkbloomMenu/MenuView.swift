@@ -1,360 +1,777 @@
+import AppKit
 import Charts
 import DarkbloomCore
+import DarkbloomMenuSupport
 import SwiftUI
 
 private struct ContentHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
+
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }
 }
 
-private enum ServingPickerIntent {
-    case start
-    case restart
+private struct FooterHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
 
-    var title: String {
-        switch self {
-        case .start: return "START SERVING"
-        case .restart: return "RESTART SERVING"
-        }
-    }
-
-    var actionLabel: String {
-        switch self {
-        case .start: return "Start"
-        case .restart: return "Restart"
-        }
-    }
-
-    var actionIcon: String {
-        switch self {
-        case .start: return "play.fill"
-        case .restart: return "arrow.clockwise"
-        }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
 struct MenuView: View {
-    private static let menuWidth: CGFloat = 340
-    private static let minimumScrollHeight: CGFloat = 385
-    private static let maximumScrollHeight: CGFloat = 640
+    private static let menuWidth: CGFloat = 372
+    private static let normalMinimumScrollHeight: CGFloat = 430
+    private static let pickerMinimumScrollHeight: CGFloat = 260
+    private static let normalMaximumScrollHeight: CGFloat = 690
+    private static let pickerMaximumScrollHeight: CGFloat = 360
 
     @ObservedObject var state: AppState
-    @State private var contentHeight: CGFloat = minimumScrollHeight
+    @ObservedObject var preferences: MenuPreferencesStore
+    @State private var contentHeight: CGFloat = normalMinimumScrollHeight
+    @State private var footerHeight: CGFloat = 0
+    @State private var expandedSections: Set<MenuSection> = []
     @State private var pickerOpen = false
     @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
-    @State private var prewarmAfterRestart = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().padding(.horizontal, 12)
-            // The MenuBarExtra panel sizes to the view's ideal height, and a
-            // bare ScrollView's ideal height is zero — so measure the content
-            // and give the scroll region an explicit height. Keep a stable
-            // baseline while startup data is sparse so the panel never opens
-            // as a clipped half-height window.
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    earningsSection
-                    thisMacSection
-                    fleetSection
-                    chartSection
-                    if let err = state.remoteError {
-                        Label(err, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                panelHeader
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        StatusHeroView(
+                            statusColor: Color(nsColor: state.status.color),
+                            statusSymbol: statusSymbol,
+                            title: primaryStatusText,
+                            subtitle: secondaryStatusText,
+                            metrics: heroMetrics,
+                            lines: statusLines
+                        )
+
+                        ForEach(visibleMenuSections) { section in
+                            sectionCard(section)
+                        }
                     }
+                    .padding(12)
+                    .padding(.bottom, footerOverlayPadding)
+                    .frame(maxWidth: .infinity, minHeight: minimumScrollHeight, alignment: .topLeading)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                        }
+                    )
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, minHeight: Self.minimumScrollHeight, alignment: .topLeading)
+                .frame(height: scrollHeight)
+                .onPreferenceChange(ContentHeightKey.self) {
+                    contentHeight = max($0, minimumScrollHeight)
+                }
+            }
+
+            footer
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
                 .background(
-                    GeometryReader { g in
-                        Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: FooterHeightKey.self, value: proxy.size.height)
                     }
                 )
-            }
-            .frame(height: scrollHeight)
-            .onPreferenceChange(ContentHeightKey.self) {
-                contentHeight = max($0, Self.minimumScrollHeight)
-            }
-            Divider().padding(.horizontal, 12)
-            footer
+                .zIndex(1)
         }
         .frame(width: Self.menuWidth)
-        // The panel view persists across dismissals; don't leave a stale
-        // picker open the next time the dropdown appears.
-        .onDisappear { pickerOpen = false }
+        .background(.thinMaterial)
+        .onPreferenceChange(FooterHeightKey.self) {
+            footerHeight = $0
+        }
+        .onAppear {
+            expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
+        }
+        .onChange(of: preferences.snapshot.sectionPresentations) { _, _ in
+            expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
+        }
+        .onDisappear {
+            pickerOpen = false
+            expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
+        }
     }
 
     private var scrollHeight: CGFloat {
-        min(max(contentHeight, Self.minimumScrollHeight), Self.maximumScrollHeight)
+        min(max(contentHeight, minimumScrollHeight), maximumScrollHeight)
     }
 
-    // MARK: Header
+    private var minimumScrollHeight: CGFloat {
+        pickerOpen ? Self.pickerMinimumScrollHeight : Self.normalMinimumScrollHeight
+    }
 
-    private var header: some View {
+    private var maximumScrollHeight: CGFloat {
+        pickerOpen ? Self.pickerMaximumScrollHeight : Self.normalMaximumScrollHeight
+    }
+
+    private var footerOverlayPadding: CGFloat {
+        max(footerHeight + 18, 58)
+    }
+
+    private var panelHeader: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(Color(nsColor: state.status.color))
-                .frame(width: 9, height: 9)
-                .shadow(color: Color(nsColor: state.status.color).opacity(0.6), radius: 3)
-            Text("Darkbloom")
-                .font(.system(size: 13, weight: .semibold))
-            Text(state.status.label)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            Spacer()
-            if let d = state.daemon, state.status != .stopped {
-                Text("v\(d.version)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    // MARK: Earnings
-
-    private var earningsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionLabel("Earnings")
-            if let e = state.earnings {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(Fmt.usd(e.availableBalanceMicroUSD))
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .contentTransition(.numericText())
-                    Text("balance")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 3) {
-                    GridRow {
-                        stat("Today", Fmt.usd(state.windows.last24hMicroUSD))
-                        stat("7 days", Fmt.usd(state.windows.last7dMicroUSD))
-                        stat("Lifetime", Fmt.usd(e.totalMicroUSD))
-                    }
-                    GridRow {
-                        stat("Jobs today", "\(state.windows.last24hJobs)")
-                        stat("Total jobs", "\(e.count)")
-                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                    }
-                }
-            } else {
-                Text(state.remoteError ?? "Loading…")
+            Image(nsImage: StatusIcon.image(for: state.status))
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Darkbloom Monitor")
+                    .font(.system(.headline, design: .default, weight: .semibold))
+                Text("Provider control")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Spacer()
+            Text(headerStatusText)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(headerStatusColor)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
+    private var headerStatusText: String {
+        switch state.status {
+        case .serving: return "Online"
+        case .running: return "Connecting"
+        case .stopped: return "Offline"
         }
     }
 
-    // MARK: This Mac
+    private var headerStatusColor: Color {
+        switch state.status {
+        case .serving: return .green
+        case .running: return .orange
+        case .stopped: return .red
+        }
+    }
+
+    @ViewBuilder
+    private func sectionCard(_ section: MenuSection) -> some View {
+        switch section {
+        case .earnings:
+            MonitorSectionCard(
+                section: section,
+                subtitle: earningsSubtitle,
+                isExpanded: expandedSections.contains(section),
+                isForcedVisible: forcedVisibleSections.contains(section),
+                toggle: { toggle(section) }
+            ) {
+                earningsDetail
+            }
+        case .thisMac:
+            MonitorSectionCard(
+                section: section,
+                subtitle: thisMacSubtitle,
+                isExpanded: expandedSections.contains(section),
+                isForcedVisible: forcedVisibleSections.contains(section),
+                toggle: { toggle(section) }
+            ) {
+                thisMacDetail
+            }
+        case .health:
+            MonitorSectionCard(
+                section: section,
+                subtitle: healthSummary.text,
+                isExpanded: expandedSections.contains(section),
+                isForcedVisible: forcedVisibleSections.contains(section),
+                toggle: { toggle(section) }
+            ) {
+                healthDetail
+            }
+        case .activity:
+            MonitorSectionCard(
+                section: section,
+                subtitle: activitySubtitle,
+                isExpanded: expandedSections.contains(section),
+                isForcedVisible: forcedVisibleSections.contains(section),
+                toggle: { toggle(section) }
+            ) {
+                jobsChart
+            }
+        case .fleet:
+            MonitorSectionCard(
+                section: section,
+                subtitle: fleetSubtitle,
+                isExpanded: expandedSections.contains(section),
+                isForcedVisible: forcedVisibleSections.contains(section),
+                toggle: { toggle(section) }
+            ) {
+                fleetDetail
+            }
+        }
+    }
+
+    private var availableMenuSections: [MenuSection] {
+        var sections: [MenuSection] = [.earnings, .thisMac, .health]
+        if !state.hourlyJobs.isEmpty {
+            sections.append(.activity)
+        }
+        if state.fleet.contains(where: { !$0.isThisMac }) {
+            sections.append(.fleet)
+        }
+        return sections
+    }
+
+    private var visibleMenuSections: [MenuSection] {
+        preferences.snapshot.effectiveVisibleSections(
+            from: availableMenuSections,
+            warningSections: warningSections
+        )
+    }
+
+    private var forcedVisibleSections: Set<MenuSection> {
+        Set(visibleMenuSections.filter { section in
+            !preferences.snapshot.isVisible(section) && warningSections.contains(section)
+        })
+    }
+
+    private var warningSections: Set<MenuSection> {
+        healthSummary.kind == .warning ? [.health] : []
+    }
+
+    private func toggle(_ section: MenuSection) {
+        if expandedSections.contains(section) {
+            expandedSections.remove(section)
+        } else {
+            expandedSections.insert(section)
+        }
+    }
 
     private var thisMacLive: CoordinatorAPI.AttestedProvider? {
         state.fleet.first(where: \.isThisMac)?.live
     }
 
-    /// Most recent paid job from this machine's current session, for the
-    /// earning/idle activity line.
-    private var lastJobHere: Date? {
-        guard let id = thisMacLive?.providerID else { return nil }
-        return state.earnings?.earnings.first { $0.providerID == id }?.createdAt
+    private var lastAccountJob: Date? {
+        state.earnings?.earnings
+            .map(\.createdAt)
+            .max()
+    }
+
+    private var servedModels: [String] {
+        state.currentModels.isEmpty ? (thisMacLive?.models ?? []) : state.currentModels
+    }
+
+    private var loadedModelCount: Int {
+        guard let daemon = state.daemon else { return 0 }
+        return servedModels.filter { id in
+            id == daemon.currentModel || (daemon.warmModels?.contains(id) ?? false)
+        }.count
+    }
+
+    private var isEarningNow: Bool {
+        guard state.status == .serving else { return false }
+        return state.daemon?.inferenceActive == true
+    }
+
+    private var heroMetrics: [SummaryMetric] {
+        guard state.earnings != nil else {
+            return [
+                .init(label: "Today", value: "--"),
+                .init(label: "7 days", value: "--"),
+                .init(label: "Jobs", value: "--")
+            ]
+        }
+        return [
+            .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
+            .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
+            .init(label: "Jobs", value: "\(state.windows.last24hJobs)")
+        ]
+    }
+
+    private var primaryStatusText: String {
+        switch state.status {
+        case .serving:
+            return isEarningNow ? "Online - earning" : "Online - waiting"
+        case .running:
+            return "Connecting"
+        case .stopped:
+            return "Stopped"
+        }
+    }
+
+    private var secondaryStatusText: String {
+        if let earnings = state.earnings {
+            var parts = [
+                "Today \(Fmt.usd(state.windows.last24hMicroUSD))",
+                "\(state.windows.last24hJobs) jobs"
+            ]
+            if let lastAccountJob {
+                parts.append("account last job \(Fmt.ago(lastAccountJob))")
+            } else if earnings.count > 0 {
+                parts.append("\(earnings.count) total jobs")
+            }
+            return parts.joined(separator: " · ")
+        }
+        return state.remoteError == nil ? "Loading earnings..." : "Coordinator unavailable"
+    }
+
+    private var modelSummaryText: String {
+        if state.status == .stopped {
+            return "Provider not running"
+        }
+        guard !servedModels.isEmpty else {
+            return "No models selected"
+        }
+        if servedModels.count == 1 {
+            if loadedModelCount > 0 {
+                return "\(servedModels[0]) loaded"
+            }
+            return "\(servedModels[0]) on demand"
+        }
+        if loadedModelCount > 0 {
+            return "\(servedModels.count) models · \(loadedModelCount) loaded"
+        }
+        return "\(servedModels.count) models"
+    }
+
+    private var statusLines: [StatusLine] {
+        var lines = [
+            StatusLine(
+                systemImage: "shippingbox",
+                text: modelSummaryText,
+                tint: state.status == .stopped ? .secondary : .green
+            ),
+            StatusLine(
+                systemImage: healthSummary.systemImage,
+                text: healthSummary.text,
+                tint: healthSummary.tint
+            )
+        ]
+        if let remoteError = state.remoteError {
+            lines.append(.init(
+                systemImage: "exclamationmark.triangle.fill",
+                text: remoteError,
+                tint: .orange,
+                multiline: true
+            ))
+        }
+        if let controlError = state.controlError {
+            lines.append(.init(
+                systemImage: "xmark.octagon.fill",
+                text: controlError,
+                tint: .red,
+                multiline: true
+            ))
+        }
+        return lines
+    }
+
+    private var healthSummary: HealthSummary {
+        var warnings: [String] = []
+        if let thermal = state.daemon?.system?.thermalState,
+           !["nominal", "fair"].contains(thermal.lowercased()) {
+            warnings.append("Thermal \(thermal.capitalized)")
+        }
+        if let pressure = state.daemon?.system?.memoryPressure, pressure > 0.80 {
+            warnings.append("Pressure \(percentText(pressure))")
+        }
+        if let memory = state.hardwareMetrics.memoryUsedFraction, memory > 0.88 {
+            warnings.append("Memory \(memoryUtilizationText(memory))")
+        }
+        if let cpu = state.hardwareMetrics.averageCPUTempC, cpu >= 90 {
+            warnings.append("CPU \(temperatureText(cpu))")
+        }
+        if let gpu = state.hardwareMetrics.averageGPUTempC, gpu >= 90 {
+            warnings.append("GPU \(temperatureText(gpu))")
+        }
+        if let first = warnings.first {
+            return .init(
+                text: warnings.count > 1 ? "\(first) +\(warnings.count - 1)" : first,
+                tint: .orange,
+                systemImage: "exclamationmark.triangle.fill",
+                kind: .warning
+            )
+        }
+        if state.hardwareMetrics == .empty && state.daemon?.system == nil {
+            return .init(
+                text: "Health data unavailable",
+                tint: .secondary,
+                systemImage: "questionmark.circle",
+                kind: .neutral
+            )
+        }
+        return .init(text: "Health normal", tint: .green, systemImage: "checkmark.circle.fill", kind: .normal)
+    }
+
+    private var statusSymbol: String {
+        switch state.status {
+        case .serving:
+            return isEarningNow ? "bolt.fill" : "checkmark"
+        case .running:
+            return "arrow.triangle.2.circlepath"
+        case .stopped:
+            return "stop.fill"
+        }
+    }
+
+    private var earningsSubtitle: String {
+        guard let earnings = state.earnings else {
+            return state.remoteError == nil ? "Loading..." : "Unavailable"
+        }
+        return "Balance \(Fmt.usd(earnings.availableBalanceMicroUSD)) · lifetime \(Fmt.usd(earnings.totalMicroUSD))"
+    }
+
+    private var thisMacSubtitle: String {
+        guard let daemon = state.daemon, state.status != .stopped else {
+            return "Provider is not running"
+        }
+        return "\(modelSummaryText) · uptime \(Fmt.uptime(daemon.uptime()))"
+    }
+
+    private var activitySubtitle: String {
+        let jobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
+        return "\(jobs) jobs in the last 24 hours"
+    }
+
+    private var fleetSubtitle: String {
+        let count = state.fleet.count
+        return "\(count) online \(count == 1 ? "Mac" : "Macs")"
+    }
+
+    private var earningsDetail: some View {
+        Group {
+            if let earnings = state.earnings {
+                MetricGrid(metrics: [
+                    .init(label: "Balance", value: Fmt.usd(earnings.availableBalanceMicroUSD)),
+                    .init(label: "Withdrawable", value: Fmt.usd(earnings.withdrawableBalanceMicroUSD)),
+                    .init(label: "Lifetime", value: Fmt.usd(earnings.totalMicroUSD)),
+                    .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
+                    .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
+                    .init(label: "Jobs today", value: "\(state.windows.last24hJobs)"),
+                    .init(label: "Total jobs", value: "\(earnings.count)")
+                ])
+            } else {
+                EmptyStateLine(text: state.remoteError ?? "Loading earnings...")
+            }
+        }
     }
 
     @ViewBuilder
-    private var thisMacSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionLabel("This Mac")
-            if let d = state.daemon, state.status != .stopped {
-                VStack(alignment: .leading, spacing: 5) {
-                    if let hw = thisMacLive {
-                        HStack(spacing: 4) {
-                            Text("\(hw.hardwareModel) · \(hw.memoryGB) GB · \(hw.gpuCores) GPU")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            Image(systemName: hw.trustLevel == "hardware" ? "checkmark.shield.fill" : "shield")
-                                .font(.system(size: 9))
-                                .foregroundStyle(hw.trustLevel == "hardware" ? .green : .orange)
-                            Text(hw.trustLevel)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
+    private var thisMacDetail: some View {
+        if let daemon = state.daemon, state.status != .stopped {
+            VStack(alignment: .leading, spacing: 10) {
+                if let hardware = thisMacLive {
+                    HStack(spacing: 6) {
+                        Label(
+                            "\(hardware.hardwareModel) · \(hardware.memoryGB) GB · \(hardware.gpuCores) GPU",
+                            systemImage: "cpu"
+                        )
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        TrustBadge(trustLevel: hardware.trustLevel)
+                    }
+                }
+
+                if !servedModels.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionMicroHeader(title: "Models", trailing: modelSummaryText)
+                        LazyVGrid(columns: modelGridColumns, alignment: .leading, spacing: 6) {
+                            ForEach(servedModels, id: \.self) { id in
+                                ModelPill(
+                                    id: id,
+                                    loaded: id == daemon.currentModel || (daemon.warmModels?.contains(id) ?? false)
+                                )
+                            }
                         }
                     }
-                    activityLine
-                    hardwareHealthSection
-                    catalogChips(d)
-                    if let s = d.stats {
-                        row("Requests (session)", Fmt.count(s.requestsServed))
-                        row("Tokens (session)", Fmt.count(s.tokensGenerated))
-                    }
-                    if let c = d.capacity {
-                        row("GPU memory", gpuMemoryText(c))
-                    }
-                    if let sys = d.system {
-                        if let t = sys.thermalState { row("Thermal", t.capitalized) }
-                        if let cpu = sys.cpuUsage { row("CPU load", percentText(cpu)) }
-                        if let mem = sys.memoryPressure { row("Memory pressure", percentText(mem)) }
-                    }
-                    row("Uptime", Fmt.uptime(d.uptime()))
-                    Text("Session stats reset when the provider restarts.")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
                 }
-            } else {
-                Text("Provider is not running")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                VStack(spacing: 5) {
+                    if let stats = daemon.stats {
+                        InfoRow("Requests", Fmt.count(stats.requestsServed), detail: "session")
+                        InfoRow("Tokens", Fmt.count(stats.tokensGenerated), detail: "session")
+                    }
+                    if let capacity = daemon.capacity {
+                        InfoRow("GPU memory", gpuMemoryText(capacity))
+                    }
+                    if !daemon.version.isEmpty {
+                        InfoRow("Provider version", "v\(daemon.version)")
+                    }
+                    InfoRow("Uptime", Fmt.uptime(daemon.uptime()))
+                }
+
+                Text("Session stats reset when the provider restarts.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        } else {
+            EmptyStateLine(text: "Provider is not running")
+        }
+    }
+
+    private var healthDetail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                MetricTile(
+                    title: "Memory",
+                    systemImage: "memorychip",
+                    value: memoryUtilizationText(state.hardwareMetrics.memoryUsedFraction),
+                    detail: "used",
+                    tint: .blue,
+                    fraction: state.hardwareMetrics.memoryUsedFraction
+                )
+                MetricTile(
+                    title: "Fans",
+                    systemImage: "fanblades",
+                    value: fanSpeedText(state.hardwareMetrics.fanRPMs),
+                    detail: fanDetailText(state.hardwareMetrics.fanRPMs),
+                    tint: .orange,
+                    fraction: fanSpeedFraction(state.hardwareMetrics.fanRPMs)
+                )
+                TemperatureTile(metrics: state.hardwareMetrics)
+            }
+
+            if let system = state.daemon?.system {
+                VStack(spacing: 5) {
+                    if let thermal = system.thermalState {
+                        InfoRow("Thermal", thermal.capitalized)
+                    }
+                    if let cpu = system.cpuUsage {
+                        InfoRow("CPU load", percentText(cpu))
+                    }
+                    if let pressure = system.memoryPressure {
+                        InfoRow("Memory pressure", percentText(pressure))
+                    }
+                }
             }
         }
     }
 
     @ViewBuilder
-    private var activityLine: some View {
-        if state.status == .serving {
-            let earning = state.daemon?.inferenceActive == true
-                || (lastJobHere.map { Date().timeIntervalSince($0) < 600 } ?? false)
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(earning ? Color.green : Color.secondary.opacity(0.5))
-                    .frame(width: 6, height: 6)
-                Text(earning ? "Earning — receiving traffic" : "Online — waiting for jobs")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(earning ? Color.green : Color.secondary)
-                if let last = lastJobHere {
-                    Text("last job \(Fmt.ago(last))")
-                        .font(.system(size: 10))
+    private var jobsChart: some View {
+        if !state.hourlyJobs.isEmpty {
+            Chart(state.hourlyJobs) { bucket in
+                BarMark(
+                    x: .value("Hour", bucket.hour, unit: .hour),
+                    y: .value("Jobs", bucket.jobs),
+                    width: .ratio(0.68)
+                )
+                .foregroundStyle(Color.green.gradient)
+                .cornerRadius(1.5)
+            }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .hour, count: 6)) {
+                    AxisGridLine().foregroundStyle(.quaternary)
+                    AxisValueLabel(format: .dateTime.hour())
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
-            .padding(.vertical, 1)
-        }
-    }
-
-    private var hardwareHealthSection: some View {
-        let metrics = state.hardwareMetrics
-        return HStack(alignment: .top, spacing: 6) {
-            hardwareMetricCard(
-                title: "Memory",
-                systemImage: "memorychip",
-                value: memoryUtilizationText(metrics.memoryUsedFraction),
-                detail: "used",
-                tint: .blue,
-                fraction: metrics.memoryUsedFraction
-            )
-            hardwareMetricCard(
-                title: "Fans",
-                systemImage: "fanblades",
-                value: fanSpeedText(metrics.fanRPMs),
-                detail: fanDetailText(metrics.fanRPMs),
-                tint: .orange,
-                fraction: fanSpeedFraction(metrics.fanRPMs)
-            )
-            temperatureMetricCard(metrics)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func hardwareMetricCard(
-        title: String,
-        systemImage: String,
-        value: String,
-        detail: String,
-        tint: Color,
-        fraction: Double?
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(tint)
-                Text(title)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+            .chartYAxis {
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
+                    AxisGridLine().foregroundStyle(.quaternary)
+                    AxisValueLabel()
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            metricBar(fraction: fraction, tint: tint)
-            Text(detail)
-                .font(.system(size: 8))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            .frame(height: 86)
+            .padding(.top, 2)
+            .accessibilityLabel("Paid jobs by hour")
+            .accessibilityValue(activityChartAccessibilityValue)
         }
-        .padding(7)
-        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+    }
+
+    private var fleetDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(state.fleet) { machine in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(machine.isThisMac ? Color(nsColor: state.status.color) : .green)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(machine.displayName)
+                                .font(.callout.weight(.medium))
+                            if machine.isThisMac {
+                                Text("this Mac")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                        Text(fleetMachineSubtitle(machine))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        Group {
+            if pickerOpen {
+                modelPicker
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else {
+                footerControls
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var pickerModels: [CoordinatorAPI.CatalogModel] {
+        var models = state.catalog
+        let known = Set(models.map(\.id))
+        for id in state.currentModels where !known.contains(id) {
+            models.append(.init(id: id, displayName: id, minRamGB: nil, sizeGB: nil, active: true))
+        }
+        return models
+    }
+
+    private var modelPicker: some View {
+        ServingModelPickerView(
+            intent: pickerIntent,
+            models: pickerModels,
+            physicalMemoryGB: state.physicalMemoryGB,
+            downloadedModels: state.downloadedModels,
+            selectedModels: $selectedModels,
+            prewarmAfterRestart: prewarmAfterRestartBinding,
+            cancel: {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    pickerOpen = false
+                }
+            },
+            commit: { models, prewarm in
+                withAnimation(.easeOut(duration: 0.18)) {
+                    pickerOpen = false
+                }
+                state.startServing(models: models, prewarm: prewarm)
+            }
         )
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.86), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+        }
     }
 
-    private func temperatureMetricCard(_ metrics: HardwareMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: "thermometer.medium")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.red)
-                Text("Temps")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+    private var prewarmAfterRestartBinding: Binding<Bool> {
+        Binding {
+            preferences.snapshot.prewarmAfterRestart
+        } set: { enabled in
+            preferences.setPrewarmAfterRestart(enabled)
+        }
+    }
+
+    private var footerControls: some View {
+        HStack(spacing: 8) {
+            if state.status == .stopped {
+                Button {
+                    openServingPicker(.start)
+                } label: {
+                    Label("Start", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(state.controlBusy)
+            } else {
+                Button {
+                    state.runControl("stop")
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(FloatingActionButtonStyle())
+                .disabled(state.controlBusy)
+                Button {
+                    openServingPicker(.restart)
+                } label: {
+                    Label("Restart", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(FloatingActionButtonStyle())
+                .disabled(state.controlBusy)
             }
-            tempRow("CPU", metrics.averageCPUTempC, tint: .red)
-            tempRow("GPU", metrics.averageGPUTempC, tint: .purple)
+
+            if state.controlBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Provider command in progress")
+            }
+
+            Spacer()
+
+            Menu {
+                SettingsLink {
+                    Label("Preferences...", systemImage: "gearshape")
+                }
+                Divider()
+                Link(destination: URL(string: "https://console.darkbloom.dev")!) {
+                    Label("Open Console", systemImage: "safari")
+                }
+                Divider()
+                Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Label("Quit", systemImage: "power")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 28, height: 26)
+                    .background(
+                        Color(nsColor: .controlBackgroundColor).opacity(0.74),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+                    }
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More options")
+            .menuIndicator(.hidden)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
         }
-        .padding(7)
-        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.red.opacity(0.18), lineWidth: 1)
-        )
+        .controlSize(.small)
+        .frame(maxWidth: .infinity)
     }
 
-    private func tempRow(_ label: String, _ value: Double?, tint: Color) -> some View {
-        HStack(spacing: 4) {
-            Text(label)
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, alignment: .leading)
-            metricBar(fraction: value.map { $0 / 100 }, tint: tint)
-            Text(temperatureText(value))
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(width: 28, alignment: .trailing)
+    private func openServingPicker(_ intent: ServingPickerIntent) {
+        state.refreshModelSelection()
+        pickerIntent = intent
+        let initialSelection = Set(state.currentModels)
+        selectedModels = initialSelection
+        withAnimation(.easeOut(duration: 0.18)) {
+            pickerOpen = true
         }
-    }
-
-    private func metricBar(fraction: Double?, tint: Color) -> some View {
-        let clamped = min(max(fraction ?? 0, 0), 1)
-        return GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule()
-                    .fill(tint.opacity(fraction == nil ? 0 : 0.75))
-                    .frame(width: proxy.size.width * clamped)
+        Task {
+            await state.refreshCatalog()
+            if pickerOpen, pickerIntent == intent, selectedModels == initialSelection {
+                selectedModels = Set(state.currentModels)
             }
         }
-        .frame(height: 4)
+    }
+
+    private var modelGridColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 0), spacing: 6),
+            GridItem(.flexible(minimum: 0), spacing: 6)
+        ]
     }
 
     private func memoryUtilizationText(_ fraction: Double?) -> String {
-        guard let fraction else { return "—" }
+        guard let fraction else { return "--" }
         return String(format: "%.0f%%", fraction * 100)
     }
 
     private func fanSpeedText(_ rpms: [Double]) -> String {
-        guard !rpms.isEmpty else { return "—" }
+        guard !rpms.isEmpty else { return "--" }
         let rpm = rpms.reduce(0, +) / Double(rpms.count)
         return "\(Int(rpm.rounded())) rpm"
     }
@@ -374,350 +791,483 @@ struct MenuView: View {
     }
 
     private func temperatureText(_ value: Double?) -> String {
-        guard let value else { return "—" }
+        guard let value else { return "--" }
         return String(format: "%.0f°", value)
     }
 
-    /// The models this Mac is serving (from the LaunchAgent plist), with the
-    /// one currently loaded in GPU memory highlighted.
-    @ViewBuilder
-    private func catalogChips(_ d: DaemonState) -> some View {
-        let models = state.currentModels.isEmpty ? (thisMacLive?.models ?? []) : state.currentModels
-        if !models.isEmpty {
+    private func gpuMemoryText(_ capacity: DaemonState.Capacity) -> String {
+        if let cache = capacity.gpuMemoryCacheGb {
+            return String(
+                format: "%.1f active · %.1f cache · %.0f GB",
+                capacity.gpuMemoryActiveGb,
+                cache,
+                capacity.totalMemoryGb
+            )
+        }
+        return String(format: "%.1f / %.0f GB", capacity.gpuMemoryActiveGb, capacity.totalMemoryGb)
+    }
+
+    private func percentText(_ value: Double) -> String {
+        String(format: "%.0f%%", value <= 1 ? value * 100 : value)
+    }
+
+    private func fleetMachineSubtitle(_ machine: FleetMachine) -> String {
+        guard let models = machine.live.models, !models.isEmpty else { return machine.live.status }
+        return models.joined(separator: ", ")
+    }
+
+    private var activityChartAccessibilityValue: String {
+        let totalJobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
+        guard let peak = state.hourlyJobs.max(by: { $0.jobs < $1.jobs }) else {
+            return "No paid jobs in the last 24 hours."
+        }
+        return "\(totalJobs) paid jobs in the last 24 hours. Peak hour had \(peak.jobs) jobs."
+    }
+}
+
+private struct SummaryMetric: Identifiable {
+    var label: String
+    var value: String
+
+    var id: String { label }
+}
+
+private struct StatusLine: Identifiable {
+    var systemImage: String
+    var text: String
+    var tint: Color
+    var multiline = false
+
+    var id: String { systemImage + text }
+}
+
+private struct HealthSummary {
+    enum Kind {
+        case normal
+        case neutral
+        case warning
+    }
+
+    var text: String
+    var tint: Color
+    var systemImage: String
+    var kind: Kind
+}
+
+private struct StatusHeroView: View {
+    var statusColor: Color
+    var statusSymbol: String
+    var title: String
+    var subtitle: String
+    var metrics: [SummaryMetric]
+    var lines: [StatusLine]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(statusColor.opacity(0.16))
+                    Image(systemName: statusSymbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(.title3, design: .rounded, weight: .semibold))
+                        .contentTransition(.numericText())
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 7) {
+                ForEach(metrics) { metric in
+                    SummaryMetricTile(metric: metric)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 6) {
-                Text("Catalog (\(models.count))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: catalogGridColumns, alignment: .leading, spacing: 5) {
-                    ForEach(models, id: \.self) { id in
-                        catalogModelPill(
-                            id,
-                            loaded: id == d.currentModel || (d.warmModels?.contains(id) ?? false)
-                        )
+                ForEach(lines) { line in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: line.systemImage)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(line.tint)
+                            .frame(width: 14)
+                        Text(line.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(line.multiline ? 3 : 1)
+                            .truncationMode(line.multiline ? .tail : .middle)
+                            .help(line.text)
+                        Spacer(minLength: 0)
                     }
                 }
             }
         }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+    }
+}
+
+private struct SummaryMetricTile: View {
+    var metric: SummaryMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(metric.value)
+                .font(.system(.callout, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(metric.label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct FloatingActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.medium))
+            .foregroundStyle(isEnabled ? .primary : .secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Color(nsColor: .windowBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+            }
+            .shadow(
+                color: .black.opacity(isEnabled ? (configuration.isPressed ? 0.10 : 0.20) : 0.06),
+                radius: isEnabled ? (configuration.isPressed ? 3 : 8) : 2,
+                x: 0,
+                y: isEnabled ? (configuration.isPressed ? 1 : 4) : 1
+            )
+            .opacity(isEnabled ? 1 : 0.58)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    }
+}
+
+private struct MonitorSectionCard<Content: View>: View {
+    var section: MenuSection
+    var subtitle: String
+    var isExpanded: Bool
+    var isForcedVisible: Bool
+    var toggle: () -> Void
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 9) {
+                    Image(systemName: section.systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Text(section.title)
+                                .font(.callout.weight(.semibold))
+                            if isForcedVisible {
+                                Text("warning")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(.orange.opacity(0.12), in: Capsule())
+                            }
+                        }
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(subtitle)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(isExpanded ? .degrees(90) : .degrees(0))
+                }
+                .contentShape(Rectangle())
+                .padding(11)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(section.title)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Press to \(isExpanded ? "collapse" : "expand") this section.")
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    content
+                }
+                .padding(.horizontal, 11)
+                .padding(.bottom, 12)
+                .transition(.opacity)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.66), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+        }
+        .animation(.easeOut(duration: 0.16), value: isExpanded)
+    }
+}
+
+private struct MetricItem: Identifiable {
+    var label: String
+    var value: String
+
+    var id: String { label }
+}
+
+private struct MetricGrid: View {
+    var metrics: [MetricItem]
+
+    private let columns = [
+        GridItem(.flexible(minimum: 0), spacing: 7),
+        GridItem(.flexible(minimum: 0), spacing: 7),
+        GridItem(.flexible(minimum: 0), spacing: 7)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 7) {
+            ForEach(metrics) { metric in
+                SummaryMetricTile(metric: .init(label: metric.label, value: metric.value))
+            }
+        }
+    }
+}
+
+private struct SectionMicroHeader: View {
+    var title: String
+    var trailing: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(trailing)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+    }
+}
+
+private struct InfoRow: View {
+    var label: String
+    var value: String
+    var detail: String?
+
+    init(_ label: String, _ value: String, detail: String? = nil) {
+        self.label = label
+        self.value = value
+        self.detail = detail
     }
 
-    private var catalogGridColumns: [GridItem] {
-        [
-            GridItem(.flexible(minimum: 0), spacing: 6),
-            GridItem(.flexible(minimum: 0), spacing: 6)
-        ]
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 98, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .lineLimit(2)
+            if let detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
     }
+}
 
-    private func catalogModelPill(_ id: String, loaded: Bool) -> some View {
+private struct ModelPill: View {
+    var id: String
+    var loaded: Bool
+
+    var body: some View {
         HStack(spacing: 5) {
             Circle()
                 .fill(loaded ? Color.green : Color.secondary.opacity(0.45))
                 .frame(width: 5, height: 5)
             Text(id)
-                .font(.system(size: 9, design: .monospaced))
+                .font(.caption2.monospaced())
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.75)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            loaded ? Color.green.opacity(0.16) : Color.secondary.opacity(0.10),
-            in: RoundedRectangle(cornerRadius: 5)
+            loaded ? Color.green.opacity(0.14) : Color.secondary.opacity(0.09),
+            in: RoundedRectangle(cornerRadius: 7)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(loaded ? Color.green.opacity(0.55) : Color.secondary.opacity(0.14), lineWidth: 1)
-        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(loaded ? Color.green.opacity(0.48) : Color.secondary.opacity(0.12), lineWidth: 1)
+        }
         .help(loaded ? "\(id) is loaded in GPU memory" : "\(id) is served on demand")
     }
+}
 
-    private func gpuMemoryText(_ c: DaemonState.Capacity) -> String {
-        if let cache = c.gpuMemoryCacheGb {
-            return String(format: "%.1f active · %.1f cache · %.0f GB",
-                          c.gpuMemoryActiveGb, cache, c.totalMemoryGb)
+private struct TrustBadge: View {
+    var trustLevel: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: trustLevel == "hardware" ? "checkmark.shield.fill" : "shield")
+                .font(.caption2.weight(.semibold))
+            Text(trustLevel)
+                .font(.caption2.weight(.medium))
         }
-        return String(format: "%.1f / %.0f GB", c.gpuMemoryActiveGb, c.totalMemoryGb)
+        .foregroundStyle(trustLevel == "hardware" ? Color.green : Color.orange)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background((trustLevel == "hardware" ? Color.green : Color.orange).opacity(0.12), in: Capsule())
     }
+}
 
-    private func percentText(_ v: Double) -> String {
-        String(format: "%.0f%%", v <= 1 ? v * 100 : v)
-    }
+private struct MetricTile: View {
+    var title: String
+    var systemImage: String
+    var value: String
+    var detail: String
+    var tint: Color
+    var fraction: Double?
 
-    // MARK: Fleet
-
-    // Only shown when more than this Mac is online — offline machines can't
-    // be enumerated from the public API, and a single-Mac account is already
-    // fully described by the This Mac section.
-    @ViewBuilder
-    private var fleetSection: some View {
-        if state.fleet.contains(where: { !$0.isThisMac }) {
-            VStack(alignment: .leading, spacing: 6) {
-                sectionLabel("My Macs")
-                ForEach(state.fleet) { m in
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 7, height: 7)
-                        Text(m.displayName)
-                            .font(.system(size: 12, weight: .medium))
-                        if m.isThisMac {
-                            Text("this Mac")
-                                .font(.system(size: 9))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.quaternary, in: Capsule())
-                        }
-                        Spacer()
-                        Text(fleetSubtitle(m))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
-    }
-
-    private func fleetSubtitle(_ m: FleetMachine) -> String {
-        guard let models = m.live.models, !models.isEmpty else { return m.live.status }
-        return models.joined(separator: ", ")
-    }
-
-    // MARK: Jobs chart
-
-    @ViewBuilder
-    private var chartSection: some View {
-        if !state.hourlyJobs.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                sectionLabel("Jobs · Last 24 Hours")
-                Chart(state.hourlyJobs) { b in
-                    BarMark(
-                        x: .value("Hour", b.hour, unit: .hour),
-                        y: .value("Jobs", b.jobs),
-                        width: .ratio(0.7)
-                    )
-                    .foregroundStyle(Color.green.gradient)
-                    .cornerRadius(1.5)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .hour, count: 6)) {
-                        AxisGridLine().foregroundStyle(.quaternary)
-                        AxisValueLabel(format: .dateTime.hour())
-                            .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
-                        AxisGridLine().foregroundStyle(.quaternary)
-                        AxisValueLabel()
-                            .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(height: 64)
-            }
-        }
-    }
-
-    // MARK: Footer
-
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let err = state.controlError {
-                Text(err)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 7)
-            }
-            if pickerOpen {
-                modelPicker
-            } else {
-                footerControls
-            }
-        }
-    }
-
-    // MARK: Model picker (Start / Restart)
-
-    /// Catalog models plus anything currently served that the catalog no
-    /// longer lists, so a restart can't silently drop a model.
-    private var pickerModels: [CoordinatorAPI.CatalogModel] {
-        var models = state.catalog
-        let known = Set(models.map(\.id))
-        for id in state.currentModels where !known.contains(id) {
-            models.append(.init(id: id, displayName: id, minRamGB: nil, sizeGB: nil, active: true))
-        }
-        return models
-    }
-
-    private var modelPicker: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(pickerIntent.title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
-            if pickerModels.isEmpty {
-                Text("Couldn't load the model catalog.")
-                    .font(.caption)
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
-            ForEach(pickerModels) { model in
-                modelRow(model)
-            }
-            Toggle("Pre-warm each model", isOn: $prewarmAfterRestart)
-                .font(.system(size: 11))
-                .toggleStyle(.checkbox)
-                .padding(.top, 2)
-            HStack(spacing: 8) {
-                Button("Cancel") { pickerOpen = false }
-                Spacer()
-                Button {
-                    pickerOpen = false
-                    state.startServing(models: pickerModels.map(\.id).filter(selectedModels.contains),
-                                       prewarm: prewarmAfterRestart)
-                } label: {
-                    Label(pickerIntent.actionLabel, systemImage: pickerIntent.actionIcon)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(selectedModels.isEmpty)
-            }
-            .controlSize(.small)
-            .padding(.top, 2)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-
-    @ViewBuilder
-    private func modelRow(_ model: CoordinatorAPI.CatalogModel) -> some View {
-        let fits = (model.minRamGB ?? 0) <= state.physicalMemoryGB
-        let downloaded = state.downloadedModels.contains(model.id)
-        Button {
-            if selectedModels.contains(model.id) {
-                selectedModels.remove(model.id)
-            } else {
-                selectedModels.insert(model.id)
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: selectedModels.contains(model.id) ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 12))
-                    .foregroundStyle(selectedModels.contains(model.id) ? Color.green : Color.secondary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.displayName)
-                        .font(.system(size: 12, weight: .medium))
-                    Text(modelCaption(model, fits: fits, downloaded: downloaded))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if !downloaded, fits {
-                    Text("will download")
-                        .font(.system(size: 9))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!fits)
-        .opacity(fits ? 1 : 0.4)
-    }
-
-    private func modelCaption(_ model: CoordinatorAPI.CatalogModel, fits: Bool, downloaded: Bool) -> String {
-        var parts: [String] = []
-        if let size = model.sizeGB { parts.append(String(format: "%.1f GB", size)) }
-        if let ram = model.minRamGB {
-            parts.append(fits ? String(format: "needs %.0f GB RAM", ram)
-                              : String(format: "needs %.0f GB RAM — too big for this Mac", ram))
-        }
-        if downloaded { parts.append("downloaded") }
-        return parts.isEmpty ? model.id : parts.joined(separator: " · ")
-    }
-
-    private var footerControls: some View {
-        HStack(spacing: 8) {
-            if state.status == .stopped {
-                Button {
-                    openServingPicker(.start)
-                } label: {
-                    Label("Start", systemImage: "play.fill")
-                }
-            } else {
-                Button {
-                    state.runControl("stop")
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                }
-                Button {
-                    openServingPicker(.restart)
-                } label: {
-                    Label("Restart", systemImage: "arrow.clockwise")
-                }
-            }
-            if state.controlBusy {
-                ProgressView().controlSize(.small)
-            }
-            Spacer()
-            Menu {
-                Link("Open Console", destination: URL(string: "https://console.darkbloom.dev")!)
-                Divider()
-                Button("Quit") { NSApp.terminate(nil) }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-        }
-        .controlSize(.small)
-        .disabled(state.controlBusy)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-
-    private func openServingPicker(_ intent: ServingPickerIntent) {
-        pickerIntent = intent
-        selectedModels = Set(state.currentModels)
-        pickerOpen = true
-        Task {
-            await state.refreshCatalog()
-            if selectedModels.isEmpty {
-                selectedModels = Set(state.currentModels)
-            }
-        }
-    }
-
-    // MARK: Bits
-
-    private func sectionLabel(_ s: String) -> some View {
-        Text(s.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.tertiary)
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
             Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-            Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
+                .font(.system(.callout, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            MetricBar(fraction: fraction, tint: tint)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
+        .padding(8)
+        .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.56), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TemperatureTile: View {
+    var metrics: HardwareMetrics
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: "thermometer.medium")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.red)
+                Text("Temps")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            TemperatureRow("CPU", metrics.averageCPUTempC, tint: .red)
+            TemperatureRow("GPU", metrics.averageGPUTempC, tint: .purple)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.56), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TemperatureRow: View {
+    var label: String
+    var value: Double?
+    var tint: Color
+
+    init(_ label: String, _ value: Double?, tint: Color) {
+        self.label = label
+        self.value = value
+        self.tint = tint
     }
 
-    private func row(_ label: String, _ value: String, mono: Bool = false) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
+    var body: some View {
+        HStack(spacing: 5) {
             Text(label)
-                .font(.system(size: 11))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 105, alignment: .leading)
-            Text(value)
-                .font(.system(size: 11, design: mono ? .monospaced : .default))
-                .lineLimit(2)
+                .frame(width: 24, alignment: .leading)
+            MetricBar(fraction: value.map { $0 / 100 }, tint: tint)
+            Text(value.map { String(format: "%.0f°", $0) } ?? "--")
+                .font(.caption2.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(width: 30, alignment: .trailing)
         }
+    }
+}
+
+private struct MetricBar: View {
+    var fraction: Double?
+    var tint: Color
+
+    var body: some View {
+        let clamped = min(max(fraction ?? 0, 0), 1)
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule()
+                    .fill(tint.opacity(fraction == nil ? 0 : 0.75))
+                    .frame(width: proxy.size.width * clamped)
+            }
+        }
+        .frame(height: 4)
+    }
+}
+
+private struct EmptyStateLine: View {
+    var text: String
+
+    var body: some View {
+        Label(text, systemImage: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }

@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import IOKit
 
-public struct HardwareMetrics: Equatable {
+public struct HardwareMetrics: Equatable, Sendable {
     public var memoryUsedFraction: Double?
     public var fanRPMs: [Double]
     public var averageCPUTempC: Double?

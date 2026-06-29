@@ -12,8 +12,8 @@ cd "$(dirname "$0")/.."
 
 BUMP="${1:-patch}"
 
-# Preflight: clean tree (tracked files), on main, up to date, tests green.
-[ -z "$(git status --porcelain -uno)" ] || { echo "error: working tree has uncommitted changes" >&2; exit 1; }
+# Preflight: clean tree, on main, up to date, tests green.
+[ -z "$(git status --porcelain)" ] || { echo "error: working tree has uncommitted changes or untracked files" >&2; exit 1; }
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 [ "$BRANCH" = "main" ] || { echo "error: release from main (on $BRANCH)" >&2; exit 1; }
 git fetch -q origin main

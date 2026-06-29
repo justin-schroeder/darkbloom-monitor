@@ -1,10 +1,12 @@
 import AppKit
 import DarkbloomCore
+import DarkbloomMenuSupport
 import SwiftUI
 
 @main
 struct DarkbloomMenuApp: App {
     @StateObject private var state: AppState
+    @StateObject private var preferences = MenuPreferencesStore()
 
     init() {
         let s = AppState()
@@ -14,21 +16,24 @@ struct DarkbloomMenuApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuView(state: state)
+            MenuView(state: state, preferences: preferences)
         } label: {
-            // NSImage is rebuilt whenever status changes; non-template so the
-            // green/red tint survives the menu bar's template rendering.
             Image(nsImage: StatusIcon.image(for: state.status))
+                .accessibilityLabel("Darkbloom Monitor, \(state.status.label)")
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(preferences: preferences)
+        }
     }
 }
 
 enum StatusIcon {
     private static var cache: [String: NSImage] = [:]
 
-    static func image(for status: NodeStatus) -> NSImage {
-        let key = status.label
+    static func image(for status: NodeStatus, template: Bool = false) -> NSImage {
+        let key = "\(status.label)-\(template ? "template" : "color")"
         if let img = cache[key] { return img }
 
         let size = NSSize(width: 16, height: 16)
@@ -36,11 +41,11 @@ enum StatusIcon {
         let img = NSImage(size: size, flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             ctx.addPath(DarkbloomLogo.path(fitting: rect.insetBy(dx: 1.5, dy: 1.5)))
-            ctx.setFillColor(status.color.cgColor)
+            ctx.setFillColor(template ? NSColor.labelColor.cgColor : status.color.cgColor)
             ctx.fillPath()
             return true
         }
-        img.isTemplate = false
+        img.isTemplate = template
         cache[key] = img
         return img
     }

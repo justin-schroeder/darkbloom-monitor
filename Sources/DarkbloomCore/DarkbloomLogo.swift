@@ -35,7 +35,7 @@ public enum DarkbloomLogo {
     public static func path(fitting rect: CGRect) -> CGPath {
         let scale = min(rect.width / viewBox.width, rect.height / viewBox.height)
         let drawn = CGSize(width: viewBox.width * scale, height: viewBox.height * scale)
-        var transform = CGAffineTransform(
+        let transform = CGAffineTransform(
             translationX: rect.minX + (rect.width - drawn.width) / 2,
             y: rect.minY + (rect.height - drawn.height) / 2
         ).scaledBy(x: scale, y: scale)

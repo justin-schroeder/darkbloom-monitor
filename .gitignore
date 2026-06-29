@@ -17,5 +17,8 @@ DerivedData/
 
 # Tooling & local state
 .claude/
+.agents/
+.agents.md
+.papercuts/
 .dmux/
 .DS_Store
