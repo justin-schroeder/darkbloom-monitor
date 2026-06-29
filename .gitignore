@@ -21,4 +21,5 @@ DerivedData/
 .agents.md
 .papercuts/
 .dmux/
+.dmux-hooks/
 .DS_Store
