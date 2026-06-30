@@ -123,6 +123,11 @@ public enum FanControlStatus: Equatable, Sendable {
 public enum FanControl {
     private static let supportLock = NSLock()
     private static var manualControlRejected = false
+    private static let baselineURL = URL(fileURLWithPath: "/Library/Application Support/Darkbloom Monitor/fan-control-baseline.json")
+
+    private struct Baseline: Codable {
+        var targets: [Int: Double]
+    }
 
     public static func apply(
         configuration: FanControlConfiguration,
@@ -147,9 +152,10 @@ public enum FanControl {
             return .unavailable("no fans")
         }
         guard temperature >= configuration.startTemperatureC else {
-            return smc.setAutomatic(fans: fans)
+            return restoreAutomatic(smc: smc, fans: fans)
         }
 
+        saveBaselineIfNeeded(fans: fans)
         let span = max(configuration.fullSpeedTemperatureC - configuration.startTemperatureC, 1)
         let percent = min(max((temperature - configuration.startTemperatureC) / span, 0), 1)
         var failed = false
@@ -196,7 +202,7 @@ public enum FanControl {
         guard !fans.isEmpty else {
             return .unavailable("no fans")
         }
-        return smc.setAutomatic(fans: fans)
+        return restoreAutomatic(smc: smc, fans: fans)
     }
 
     private static func selectedTemperature(
@@ -223,6 +229,59 @@ public enum FanControl {
         supportLock.lock()
         manualControlRejected = true
         supportLock.unlock()
+    }
+
+    private static func restoreAutomatic(smc: SMCReader, fans: [SMCReader.Fan]) -> FanControlStatus {
+        let baseline = loadBaseline()
+        let automaticStatus = smc.setAutomatic(fans: fans)
+        var failed = false
+
+        if let baseline {
+            for fan in fans where !fan.supportsManualMode {
+                guard let target = baseline.targets[fan.index],
+                      smc.setFanTargetRPM(index: fan.index, rpm: target)
+                else {
+                    failed = true
+                    continue
+                }
+            }
+            clearBaseline()
+        }
+
+        if failed {
+            return .failed("SMC rejected saved fan target")
+        }
+        return automaticStatus
+    }
+
+    private static func saveBaselineIfNeeded(fans: [SMCReader.Fan]) {
+        guard !FileManager.default.fileExists(atPath: baselineURL.path) else { return }
+        let targets = fans.reduce(into: [Int: Double]()) { result, fan in
+            if let target = fan.targetRPM {
+                result[fan.index] = target
+            }
+        }
+        guard !targets.isEmpty,
+              let data = try? JSONEncoder().encode(Baseline(targets: targets))
+        else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: baselineURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: baselineURL, options: .atomic)
+        } catch {
+            // Baseline restore is best-effort; failed SMC writes still surface separately.
+        }
+    }
+
+    private static func loadBaseline() -> Baseline? {
+        guard let data = try? Data(contentsOf: baselineURL) else { return nil }
+        return try? JSONDecoder().decode(Baseline.self, from: data)
+    }
+
+    private static func clearBaseline() {
+        try? FileManager.default.removeItem(at: baselineURL)
     }
 }
 

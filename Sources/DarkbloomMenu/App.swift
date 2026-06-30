@@ -38,9 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var preferences: MenuPreferencesStore?
 
     func applicationWillTerminate(_ notification: Notification) {
-        if preferences?.snapshot.fanControl.enabled == true {
-            _ = FanHelper.restoreAutomatic()
-        }
+        _ = FanHelper.restoreAutomatic()
     }
 }
 

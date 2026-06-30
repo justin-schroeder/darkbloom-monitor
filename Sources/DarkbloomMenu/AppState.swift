@@ -189,8 +189,23 @@ final class AppState: ObservableObject {
     }
 
     private static func isExternalFanControllerActive() -> Bool {
-        NSWorkspace.shared.runningApplications.contains { app in
+        if NSWorkspace.shared.runningApplications.contains(where: { app in
             app.bundleIdentifier == "com.crystalidea.macsfancontrol"
+        }) {
+            return true
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", "com\\.crystalidea\\.macsfancontrol"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 
