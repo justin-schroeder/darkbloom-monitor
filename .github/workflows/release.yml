@@ -55,8 +55,16 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           ditto -c -k --keepParent "dist/Darkbloom Monitor.app" notarize.zip
-          xcrun notarytool submit notarize.zip --wait \
-            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun notarytool submit notarize.zip --wait --output-format json \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
+            | tee notary-app.json
+          SUBMISSION_ID=$(python3 -c 'import json; print(json.load(open("notary-app.json"))["id"])')
+          STATUS=$(python3 -c 'import json; print(json.load(open("notary-app.json"))["status"])')
+          if [ "$STATUS" != "Accepted" ]; then
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+            exit 1
+          fi
           xcrun stapler staple "dist/Darkbloom Monitor.app"
 
       - name: Package .dmg
@@ -71,8 +79,16 @@ jobs:
         run: |
           DMG="dist/Darkbloom-Monitor-${{ github.ref_name }}.dmg"
           codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
-          xcrun notarytool submit "$DMG" --wait \
-            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun notarytool submit "$DMG" --wait --output-format json \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
+            | tee notary-dmg.json
+          SUBMISSION_ID=$(python3 -c 'import json; print(json.load(open("notary-dmg.json"))["id"])')
+          STATUS=$(python3 -c 'import json; print(json.load(open("notary-dmg.json"))["status"])')
+          if [ "$STATUS" != "Accepted" ]; then
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
           codesign --verify --deep --strict --verbose=2 "dist/Darkbloom Monitor.app"
           spctl --assess --type execute --verbose=4 "dist/Darkbloom Monitor.app"

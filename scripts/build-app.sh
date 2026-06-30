@@ -36,6 +36,7 @@ CODESIGN_ARGS=(--force --deep --options runtime --sign "$SIGN_IDENTITY")
 if [ "$SIGN_IDENTITY" != "-" ]; then
     CODESIGN_ARGS+=(--timestamp)
 fi
+codesign "${CODESIGN_ARGS[@]}" "$APP/Contents/Library/Helpers/DarkbloomFanHelper"
 codesign "${CODESIGN_ARGS[@]}" "$APP"
 
 echo "✓ built: $APP (v${VERSION})"
