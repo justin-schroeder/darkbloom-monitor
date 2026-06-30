@@ -182,12 +182,7 @@ public enum FanControl {
             markManualControlRejected()
             return .unavailable("manual fan control denied")
         }
-        let confirmedFans = Dictionary(uniqueKeysWithValues: smc.fans().map { ($0.index, $0) })
-        let targetConfirmed = requestedTargets.allSatisfy { index, targetRPM in
-            guard let targetReadback = confirmedFans[index]?.targetRPM else { return false }
-            return abs(targetReadback - targetRPM) <= 250 || targetReadback >= targetRPM * 0.9
-        }
-        guard targetConfirmed else {
+        guard confirmTargets(smc: smc, requestedTargets: requestedTargets) else {
             return .unavailable("fan target not confirmed")
         }
         return .manual(percent: percent, temperatureC: temperature)
@@ -252,6 +247,20 @@ public enum FanControl {
             return .failed("SMC rejected saved fan target")
         }
         return automaticStatus
+    }
+
+    private static func confirmTargets(smc: SMCReader, requestedTargets: [Int: Double]) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            let confirmedFans = Dictionary(uniqueKeysWithValues: smc.fans().map { ($0.index, $0) })
+            let targetConfirmed = requestedTargets.allSatisfy { index, targetRPM in
+                guard let targetReadback = confirmedFans[index]?.targetRPM else { return false }
+                return abs(targetReadback - targetRPM) <= 250 || targetReadback >= targetRPM * 0.9
+            }
+            if targetConfirmed { return true }
+            Thread.sleep(forTimeInterval: 0.15)
+        } while Date() < deadline
+        return false
     }
 
     private static func saveBaselineIfNeeded(fans: [SMCReader.Fan]) {
@@ -369,7 +378,11 @@ private final class SMCReader {
         var minimumRPM: Double?
         var maximumRPM: Double?
         var supportsManualMode: Bool
+        var manualModeKey: String?
     }
+
+    private static let fanForceModeKey = "FS! "
+    private static let forceTestKey = "Ftst"
 
     static let cpuTemperatureKeys = [
         "TC0P", "TC0E", "TC0F", "TC0H", "TC0D",
@@ -478,30 +491,76 @@ private final class SMCReader {
     func fans() -> [Fan] {
         let count = Int(readNumeric("FNum") ?? 0)
         guard count > 0 else { return [] }
+        let supportsForceMode = hasKey(Self.fanForceModeKey)
         return (0..<count).map { index in
-            Fan(
+            let manualModeKey = ["F\(index)Md", "F\(index)md"].first(where: hasKey)
+            return Fan(
                 index: index,
                 currentRPM: readNumeric("F\(index)Ac"),
                 targetRPM: readNumeric("F\(index)Tg"),
                 minimumRPM: readNumeric("F\(index)Mn"),
                 maximumRPM: readNumeric("F\(index)Mx"),
-                supportsManualMode: hasKey("F\(index)Md")
+                supportsManualMode: manualModeKey != nil || supportsForceMode,
+                manualModeKey: manualModeKey
             )
         }
     }
 
     func setAutomatic(fans: [Fan]) -> FanControlStatus {
         var failed = false
+        if hasKey(Self.fanForceModeKey), !writeNumeric(Self.fanForceModeKey, value: 0) {
+            failed = true
+        }
         for fan in fans {
             if fan.supportsManualMode, !setFanManual(index: fan.index, manual: false) {
                 failed = true
             }
         }
+        if hasKey(Self.forceTestKey), !writeNumeric(Self.forceTestKey, value: 0) {
+            failed = true
+        }
         return failed ? .failed("SMC rejected automatic fan mode") : .automatic
     }
 
     func setFanManual(index: Int, manual: Bool) -> Bool {
-        writeNumeric("F\(index)Md", value: manual ? 1 : 0)
+        var wrote = false
+        var failed = false
+        let modeKey = ["F\(index)Md", "F\(index)md"].first(where: hasKey)
+
+        if let modeKey {
+            wrote = true
+            if !writeNumeric(modeKey, value: manual ? 1 : 0) {
+                failed = true
+            }
+            if manual, readNumeric(modeKey) != 1, hasKey(Self.forceTestKey) {
+                failed = !unlockFanControl(modeKey: modeKey)
+            }
+        }
+
+        if hasKey(Self.fanForceModeKey) {
+            wrote = true
+            let currentMask = UInt32(readNumeric(Self.fanForceModeKey) ?? 0)
+            let fanBit = UInt32(1) << UInt32(index)
+            let nextMask = manual ? (currentMask | fanBit) : (currentMask & ~fanBit)
+            if !writeNumeric(Self.fanForceModeKey, value: Double(nextMask)) {
+                failed = true
+            }
+        }
+
+        return wrote && !failed
+    }
+
+    private func unlockFanControl(modeKey: String) -> Bool {
+        guard writeNumeric(Self.forceTestKey, value: 1) else { return false }
+        let deadline = Date().addingTimeInterval(10)
+        repeat {
+            if writeNumeric(modeKey, value: 1),
+               readNumeric(modeKey) == 1 {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        return false
     }
 
     func setFanTargetRPM(index: Int, rpm: Double) -> Bool {
