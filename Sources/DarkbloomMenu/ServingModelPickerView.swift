@@ -45,10 +45,8 @@ struct ServingModelPickerView: View {
     var cancel: () -> Void
     var commit: ([String], Bool) -> Void
 
-    @FocusState private var pickerFocused: Bool
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             header
 
             if models.isEmpty {
@@ -62,7 +60,7 @@ struct ServingModelPickerView: View {
                     }
                     .padding(.vertical, 1)
                 }
-                .frame(maxHeight: 230)
+                .frame(height: modelListHeight)
             }
 
             if !unavailableSelectedModels.isEmpty {
@@ -77,13 +75,12 @@ struct ServingModelPickerView: View {
 
             footer
         }
-        .padding(12)
-        .focusable()
-        .focused($pickerFocused)
-        .onAppear {
-            pickerFocused = true
-        }
+        .padding(10)
         .onExitCommand(perform: cancel)
+    }
+
+    private var modelListHeight: CGFloat {
+        min(max(CGFloat(models.count) * 40, 40), 180)
     }
 
     private var header: some View {
@@ -121,6 +118,7 @@ struct ServingModelPickerView: View {
         HStack(spacing: 8) {
             Button("Cancel", action: cancel)
                 .keyboardShortcut(.cancelAction)
+                .buttonStyle(PickerFooterButtonStyle())
 
             Spacer()
 
@@ -130,8 +128,7 @@ struct ServingModelPickerView: View {
                 Label(intent.actionLabel, systemImage: intent.actionIcon)
             }
             .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
+            .buttonStyle(PickerFooterButtonStyle(tint: .green))
             .disabled(commitSelection.isEmpty || !unavailableSelectedModels.isEmpty)
         }
         .controlSize(.small)
@@ -171,7 +168,7 @@ struct ServingModelPickerView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
             .background(
                 selected ? Color.green.opacity(0.10) : Color(nsColor: .controlBackgroundColor).opacity(0.60),
@@ -256,6 +253,35 @@ private struct ModelBadge: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(color.opacity(0.12), in: Capsule())
+    }
+}
+
+private struct PickerFooterButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var tint: Color? = nil
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.medium))
+            .foregroundStyle(isEnabled ? (tint ?? .primary) : .secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Color(nsColor: .windowBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+            }
+            .shadow(
+                color: .black.opacity(isEnabled ? (configuration.isPressed ? 0.10 : 0.20) : 0.06),
+                radius: isEnabled ? (configuration.isPressed ? 3 : 8) : 2,
+                x: 0,
+                y: isEnabled ? (configuration.isPressed ? 1 : 4) : 1
+            )
+            .opacity(isEnabled ? 1 : 0.58)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }
 }
 

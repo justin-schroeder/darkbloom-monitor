@@ -12,80 +12,63 @@ private struct ContentHeightKey: PreferenceKey {
     }
 }
 
-private struct FooterHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct MenuView: View {
-    private static let menuWidth: CGFloat = 372
-    private static let normalMinimumScrollHeight: CGFloat = 430
+    private static let menuWidth: CGFloat = 360
+    private static let normalMinimumScrollHeight: CGFloat = 390
     private static let pickerMinimumScrollHeight: CGFloat = 260
-    private static let normalMaximumScrollHeight: CGFloat = 690
+    private static let normalMaximumScrollHeight: CGFloat = 660
     private static let pickerMaximumScrollHeight: CGFloat = 360
 
     @ObservedObject var state: AppState
     @ObservedObject var preferences: MenuPreferencesStore
     @State private var contentHeight: CGFloat = normalMinimumScrollHeight
-    @State private var footerHeight: CGFloat = 0
     @State private var expandedSections: Set<MenuSection> = []
     @State private var pickerOpen = false
     @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                panelHeader
+        VStack(alignment: .leading, spacing: 0) {
+            panelHeader
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        StatusHeroView(
-                            statusColor: Color(nsColor: state.status.color),
-                            statusSymbol: statusSymbol,
-                            title: primaryStatusText,
-                            subtitle: secondaryStatusText,
-                            metrics: heroMetrics,
-                            lines: statusLines
-                        )
-
-                        ForEach(visibleMenuSections) { section in
-                            sectionCard(section)
-                        }
-                    }
-                    .padding(12)
-                    .padding(.bottom, footerOverlayPadding)
-                    .frame(maxWidth: .infinity, minHeight: minimumScrollHeight, alignment: .topLeading)
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    StatusHeroView(
+                        statusColor: Color(nsColor: state.status.color),
+                        statusSymbol: statusSymbol,
+                        title: primaryStatusText,
+                        subtitle: secondaryStatusText,
+                        metrics: heroMetrics,
+                        lines: statusLines
                     )
+
+                    ForEach(visibleMenuSections) { section in
+                        sectionCard(section)
+                    }
                 }
-                .frame(height: scrollHeight)
-                .onPreferenceChange(ContentHeightKey.self) {
-                    contentHeight = max($0, minimumScrollHeight)
-                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: minimumScrollHeight, alignment: .topLeading)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                    }
+                )
+            }
+            .scrollContentBackground(.hidden)
+            .background(panelFill)
+            .frame(height: scrollHeight)
+            .onPreferenceChange(ContentHeightKey.self) {
+                contentHeight = max($0, minimumScrollHeight)
             }
 
             footer
-                .padding(.horizontal, 12)
-                .padding(.bottom, 10)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: FooterHeightKey.self, value: proxy.size.height)
-                    }
-                )
-                .zIndex(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(panelFill)
         }
         .frame(width: Self.menuWidth)
-        .background(.thinMaterial)
-        .onPreferenceChange(FooterHeightKey.self) {
-            footerHeight = $0
-        }
+        .background(panelFill)
         .onAppear {
             expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
         }
@@ -110,8 +93,8 @@ struct MenuView: View {
         pickerOpen ? Self.pickerMaximumScrollHeight : Self.normalMaximumScrollHeight
     }
 
-    private var footerOverlayPadding: CGFloat {
-        max(footerHeight + 18, 58)
+    private var panelFill: Material {
+        .regularMaterial
     }
 
     private var panelHeader: some View {
@@ -132,7 +115,8 @@ struct MenuView: View {
                 .foregroundStyle(headerStatusColor)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.vertical, 9)
+        .background(panelFill)
     }
 
     private var headerStatusText: String {
@@ -253,6 +237,24 @@ struct MenuView: View {
             .max()
     }
 
+    private var lastThisMacJob: Date? {
+        guard let providerID = thisMacLive?.providerID else { return nil }
+        return state.earnings?.earnings
+            .filter { $0.providerID == providerID }
+            .map(\.createdAt)
+            .max()
+    }
+
+    private var lastRequest: (date: Date, isThisMac: Bool)? {
+        if let lastThisMacJob {
+            return (lastThisMacJob, true)
+        }
+        if let lastAccountJob {
+            return (lastAccountJob, false)
+        }
+        return nil
+    }
+
     private var servedModels: [String] {
         state.currentModels.isEmpty ? (thisMacLive?.models ?? []) : state.currentModels
     }
@@ -336,13 +338,22 @@ struct MenuView: View {
                 systemImage: "shippingbox",
                 text: modelSummaryText,
                 tint: state.status == .stopped ? .secondary : .green
-            ),
+            )
+        ]
+        if let lastRequest {
+            lines.append(.init(
+                systemImage: "clock.arrow.circlepath",
+                text: "\(lastRequest.isThisMac ? "Last request" : "Last account request") \(requestAgoText(lastRequest.date))",
+                tint: .secondary
+            ))
+        }
+        lines.append(
             StatusLine(
                 systemImage: healthSummary.systemImage,
                 text: healthSummary.text,
                 tint: healthSummary.tint
             )
-        ]
+        )
         if let remoteError = state.remoteError {
             lines.append(.init(
                 systemImage: "exclamationmark.triangle.fill",
@@ -677,8 +688,7 @@ struct MenuView: View {
                 } label: {
                     Label("Start", systemImage: "play.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .buttonStyle(FloatingActionButtonStyle(tint: .green))
                 .disabled(state.controlBusy)
             } else {
                 Button {
@@ -816,6 +826,12 @@ struct MenuView: View {
         return models.joined(separator: ", ")
     }
 
+    private func requestAgoText(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     private var activityChartAccessibilityValue: String {
         let totalJobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
         guard let peak = state.hourlyJobs.max(by: { $0.jobs < $1.jobs }) else {
@@ -863,20 +879,20 @@ private struct StatusHeroView: View {
     var lines: [StatusLine]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 9) {
                 ZStack {
                     Circle()
                         .fill(statusColor.opacity(0.16))
                     Image(systemName: statusSymbol)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(statusColor)
                 }
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(.title3, design: .rounded, weight: .semibold))
+                        .font(.system(.headline, design: .rounded, weight: .semibold))
                         .contentTransition(.numericText())
                     Text(subtitle)
                         .font(.caption)
@@ -910,10 +926,10 @@ private struct StatusHeroView: View {
                 }
             }
         }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
     }
@@ -934,20 +950,21 @@ private struct SummaryMetricTile: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.50), in: RoundedRectangle(cornerRadius: 7))
     }
 }
 
 private struct FloatingActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    var tint: Color? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.callout.weight(.medium))
-            .foregroundStyle(isEnabled ? .primary : .secondary)
+            .foregroundStyle(isEnabled ? (tint ?? .primary) : .secondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(
@@ -980,16 +997,16 @@ private struct MonitorSectionCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: toggle) {
-                HStack(spacing: 9) {
+                HStack(spacing: 8) {
                     Image(systemName: section.systemImage)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(.secondary)
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 2) {
+                        .frame(width: 17)
+                    VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
                             Text(section.title)
-                                .font(.callout.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                             if isForcedVisible {
                                 Text("warning")
                                     .font(.caption2.weight(.medium))
@@ -1000,7 +1017,7 @@ private struct MonitorSectionCard<Content: View>: View {
                             }
                         }
                         Text(subtitle)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1013,7 +1030,8 @@ private struct MonitorSectionCard<Content: View>: View {
                         .rotationEffect(isExpanded ? .degrees(90) : .degrees(0))
                 }
                 .contentShape(Rectangle())
-                .padding(11)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(section.title)
@@ -1021,17 +1039,17 @@ private struct MonitorSectionCard<Content: View>: View {
             .accessibilityHint("Press to \(isExpanded ? "collapse" : "expand") this section.")
 
             if isExpanded {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     content
                 }
-                .padding(.horizontal, 11)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
                 .transition(.opacity)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.66), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.58), in: RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
         }
         .animation(.easeOut(duration: 0.16), value: isExpanded)
