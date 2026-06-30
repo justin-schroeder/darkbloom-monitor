@@ -603,6 +603,12 @@ struct MenuView: View {
             if reason == "install fan helper" {
                 return "Install helper to enable cooling assist"
             }
+            if reason == "external fan controller active" {
+                return "Paused - Macs Fan Control is running"
+            }
+            if reason == "fan target not confirmed" {
+                return "Cooling not confirmed - fan target was overridden"
+            }
             return "Unavailable - \(reason)"
         case .failed(let reason):
             return "Failed - \(reason)"

@@ -47,6 +47,7 @@ final class AppState: ObservableObject {
     @Published var fanHelperInstalled = FanHelper.isInstalled
     @Published var fanHelperInstallBusy = false
     @Published var fanHelperInstallError: String?
+    @Published var externalFanControllerActive = false
 
     let physicalMemoryGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
@@ -154,6 +155,7 @@ final class AppState: ObservableObject {
             }.value
             hardwareMetrics = metrics
             hardwareRefreshInFlight = false
+            externalFanControllerActive = Self.isExternalFanControllerActive()
             applyFanControl(metrics: metrics)
         }
     }
@@ -162,6 +164,10 @@ final class AppState: ObservableObject {
         let settings = fanControlSettings
         guard settings.enabled else {
             fanControlStatus = .automatic
+            return
+        }
+        guard !externalFanControllerActive else {
+            fanControlStatus = .unavailable("external fan controller active")
             return
         }
         guard !fanControlInFlight else { return }
@@ -179,6 +185,12 @@ final class AppState: ObservableObject {
             fanControlStatus = status
             fanHelperInstalled = FanHelper.isInstalled
             fanControlInFlight = false
+        }
+    }
+
+    private static func isExternalFanControllerActive() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            app.bundleIdentifier == "com.crystalidea.macsfancontrol"
         }
     }
 

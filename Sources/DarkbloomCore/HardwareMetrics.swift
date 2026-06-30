@@ -72,6 +72,12 @@ public enum FanControlStatus: Equatable, Sendable {
             if reason == "install fan helper" {
                 return "Install fan helper to enable cooling assist"
             }
+            if reason == "external fan controller active" {
+                return "Paused - another fan controller is running"
+            }
+            if reason == "fan target not confirmed" {
+                return "Cooling not confirmed"
+            }
             return "Unavailable - \(reason)"
         case .failed(let reason):
             return "Failed - \(reason)"
@@ -147,6 +153,7 @@ public enum FanControl {
         let span = max(configuration.fullSpeedTemperatureC - configuration.startTemperatureC, 1)
         let percent = min(max((temperature - configuration.startTemperatureC) / span, 0), 1)
         var failed = false
+        var requestedTargets: [Int: Double] = [:]
 
         for fan in fans {
             let minRPM = fan.minimumRPM ?? 1_200
@@ -155,6 +162,7 @@ public enum FanControl {
             let targetRPM = percent >= 1
                 ? maxRPM
                 : max(rampRPM, fan.currentRPM ?? rampRPM)
+            requestedTargets[fan.index] = targetRPM
             if fan.supportsManualMode, !smc.setFanManual(index: fan.index, manual: true) {
                 failed = true
             }
@@ -167,6 +175,14 @@ public enum FanControl {
             _ = smc.setAutomatic(fans: fans)
             markManualControlRejected()
             return .unavailable("manual fan control denied")
+        }
+        let confirmedFans = Dictionary(uniqueKeysWithValues: smc.fans().map { ($0.index, $0) })
+        let targetConfirmed = requestedTargets.allSatisfy { index, targetRPM in
+            guard let targetReadback = confirmedFans[index]?.targetRPM else { return false }
+            return abs(targetReadback - targetRPM) <= 250 || targetReadback >= targetRPM * 0.9
+        }
+        guard targetConfirmed else {
+            return .unavailable("fan target not confirmed")
         }
         return .manual(percent: percent, temperatureC: temperature)
     }
