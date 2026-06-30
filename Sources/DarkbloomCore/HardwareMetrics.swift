@@ -28,6 +28,188 @@ public struct HardwareMetrics: Equatable, Sendable {
     )
 }
 
+public enum FanControlSensorSelection: String, Equatable, Sendable {
+    case hottest
+    case cpu
+    case gpu
+}
+
+public struct FanControlConfiguration: Equatable, Sendable {
+    public var enabled: Bool
+    public var sensor: FanControlSensorSelection
+    public var startTemperatureC: Double
+    public var fullSpeedTemperatureC: Double
+
+    public init(
+        enabled: Bool,
+        sensor: FanControlSensorSelection,
+        startTemperatureC: Double,
+        fullSpeedTemperatureC: Double
+    ) {
+        self.enabled = enabled
+        self.sensor = sensor
+        self.startTemperatureC = startTemperatureC
+        self.fullSpeedTemperatureC = max(fullSpeedTemperatureC, startTemperatureC + 1)
+    }
+}
+
+public enum FanControlStatus: Equatable, Sendable {
+    case automatic
+    case manual(percent: Double, temperatureC: Double)
+    case unavailable(String)
+    case failed(String)
+
+    public var displayText: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .manual(let percent, let temperatureC):
+            return String(format: "Cooling assist %.0f%% at %.0f°", percent * 100, temperatureC)
+        case .unavailable(let reason):
+            if reason == "manual fan control denied" {
+                return "Automatic - manual fan control unavailable"
+            }
+            if reason == "install fan helper" {
+                return "Install fan helper to enable cooling assist"
+            }
+            return "Unavailable - \(reason)"
+        case .failed(let reason):
+            return "Failed - \(reason)"
+        }
+    }
+
+    public var commandOutput: String {
+        switch self {
+        case .automatic:
+            return "automatic"
+        case .manual(let percent, let temperatureC):
+            return String(format: "manual %.6f %.6f", percent, temperatureC)
+        case .unavailable(let reason):
+            return "unavailable \(reason)"
+        case .failed(let reason):
+            return "failed \(reason)"
+        }
+    }
+
+    public static func commandOutput(_ output: String) -> FanControlStatus? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "automatic" {
+            return .automatic
+        }
+        if trimmed.hasPrefix("manual ") {
+            let parts = trimmed.split(separator: " ", maxSplits: 2).map(String.init)
+            guard parts.count == 3,
+                  let percent = Double(parts[1]),
+                  let temperatureC = Double(parts[2])
+            else { return nil }
+            return .manual(percent: percent, temperatureC: temperatureC)
+        }
+        if trimmed.hasPrefix("unavailable ") {
+            return .unavailable(String(trimmed.dropFirst("unavailable ".count)))
+        }
+        if trimmed.hasPrefix("failed ") {
+            return .failed(String(trimmed.dropFirst("failed ".count)))
+        }
+        return nil
+    }
+}
+
+public enum FanControl {
+    private static let supportLock = NSLock()
+    private static var manualControlRejected = false
+
+    public static func apply(
+        configuration: FanControlConfiguration,
+        metrics: HardwareMetrics
+    ) -> FanControlStatus {
+        guard configuration.enabled else {
+            return restoreAutomatic()
+        }
+        guard !hasRejectedManualControl else {
+            return .unavailable("manual fan control denied")
+        }
+        guard let temperature = selectedTemperature(configuration.sensor, metrics: metrics) else {
+            let status = restoreAutomatic()
+            if case .failed = status { return status }
+            return .unavailable("no temperature sensor")
+        }
+        guard let smc = SMCReader() else {
+            return .unavailable("SMC unavailable")
+        }
+        let fans = smc.fans()
+        guard !fans.isEmpty else {
+            return .unavailable("no fans")
+        }
+        guard temperature >= configuration.startTemperatureC else {
+            return smc.setAutomatic(fans: fans)
+        }
+
+        let span = max(configuration.fullSpeedTemperatureC - configuration.startTemperatureC, 1)
+        let percent = min(max((temperature - configuration.startTemperatureC) / span, 0), 1)
+        var failed = false
+
+        for fan in fans {
+            let minRPM = fan.minimumRPM ?? 1_200
+            let maxRPM = max(fan.maximumRPM ?? max(minRPM, 6_000), minRPM + 1)
+            let rampRPM = minRPM + (maxRPM - minRPM) * percent
+            let targetRPM = percent >= 1
+                ? maxRPM
+                : max(rampRPM, fan.currentRPM ?? rampRPM)
+            if fan.supportsManualMode, !smc.setFanManual(index: fan.index, manual: true) {
+                failed = true
+            }
+            if !smc.setFanTargetRPM(index: fan.index, rpm: targetRPM) {
+                failed = true
+            }
+        }
+
+        if failed {
+            _ = smc.setAutomatic(fans: fans)
+            markManualControlRejected()
+            return .unavailable("manual fan control denied")
+        }
+        return .manual(percent: percent, temperatureC: temperature)
+    }
+
+    @discardableResult
+    public static func restoreAutomatic() -> FanControlStatus {
+        guard let smc = SMCReader() else {
+            return .unavailable("SMC unavailable")
+        }
+        let fans = smc.fans()
+        guard !fans.isEmpty else {
+            return .unavailable("no fans")
+        }
+        return smc.setAutomatic(fans: fans)
+    }
+
+    private static func selectedTemperature(
+        _ sensor: FanControlSensorSelection,
+        metrics: HardwareMetrics
+    ) -> Double? {
+        switch sensor {
+        case .hottest:
+            return [metrics.averageCPUTempC, metrics.averageGPUTempC].compactMap(\.self).max()
+        case .cpu:
+            return metrics.averageCPUTempC
+        case .gpu:
+            return metrics.averageGPUTempC
+        }
+    }
+
+    private static var hasRejectedManualControl: Bool {
+        supportLock.lock()
+        defer { supportLock.unlock() }
+        return manualControlRejected
+    }
+
+    private static func markManualControlRejected() {
+        supportLock.lock()
+        manualControlRejected = true
+        supportLock.unlock()
+    }
+}
+
 public enum HardwareMetricsReader {
     private static let sensorKeyLock = NSLock()
     private static var cachedCPUTemperatureKeys: [String]?
@@ -105,6 +287,15 @@ public enum HardwareMetricsReader {
 }
 
 private final class SMCReader {
+    struct Fan {
+        var index: Int
+        var currentRPM: Double?
+        var targetRPM: Double?
+        var minimumRPM: Double?
+        var maximumRPM: Double?
+        var supportsManualMode: Bool
+    }
+
     static let cpuTemperatureKeys = [
         "TC0P", "TC0E", "TC0F", "TC0H", "TC0D",
         "TC0C", "TC1C", "TC2C", "TC3C", "TC4C", "TC5C", "TC6C", "TC7C", "TC8C",
@@ -206,11 +397,40 @@ private final class SMCReader {
     }
 
     func fanRPMs() -> [Double] {
+        fans().compactMap { $0.currentRPM?.rounded() }
+    }
+
+    func fans() -> [Fan] {
         let count = Int(readNumeric("FNum") ?? 0)
         guard count > 0 else { return [] }
-        return (0..<count).compactMap { index in
-            readNumeric("F\(index)Ac").map { $0.rounded() }
+        return (0..<count).map { index in
+            Fan(
+                index: index,
+                currentRPM: readNumeric("F\(index)Ac"),
+                targetRPM: readNumeric("F\(index)Tg"),
+                minimumRPM: readNumeric("F\(index)Mn"),
+                maximumRPM: readNumeric("F\(index)Mx"),
+                supportsManualMode: hasKey("F\(index)Md")
+            )
         }
+    }
+
+    func setAutomatic(fans: [Fan]) -> FanControlStatus {
+        var failed = false
+        for fan in fans {
+            if fan.supportsManualMode, !setFanManual(index: fan.index, manual: false) {
+                failed = true
+            }
+        }
+        return failed ? .failed("SMC rejected automatic fan mode") : .automatic
+    }
+
+    func setFanManual(index: Int, manual: Bool) -> Bool {
+        writeNumeric("F\(index)Md", value: manual ? 1 : 0)
+    }
+
+    func setFanTargetRPM(index: Int, rpm: Double) -> Bool {
+        writeNumeric("F\(index)Tg", value: rpm)
     }
 
     func averageTemperature(keys: [String]) -> Double? {
@@ -297,6 +517,44 @@ private final class SMCReader {
         return Value(dataType: Self.string(infoOutput.keyInfo.dataType), bytes: bytes)
     }
 
+    private func hasKey(_ key: String) -> Bool {
+        let keyCode = Self.fourCharCode(key)
+        var infoInput = KeyData()
+        var infoOutput = KeyData()
+        infoInput.key = keyCode
+        infoInput.data8 = 9
+        return call(input: &infoInput, output: &infoOutput) == kIOReturnSuccess
+            && infoOutput.result == 0
+    }
+
+    private func writeNumeric(_ key: String, value: Double) -> Bool {
+        guard let existing = readValue(key),
+              let bytes = Self.encode(value, as: existing.dataType)
+        else { return false }
+        return writeValue(key, bytes: bytes)
+    }
+
+    private func writeValue(_ key: String, bytes: [UInt8]) -> Bool {
+        let keyCode = Self.fourCharCode(key)
+        var infoInput = KeyData()
+        var infoOutput = KeyData()
+        infoInput.key = keyCode
+        infoInput.data8 = 9
+        guard call(input: &infoInput, output: &infoOutput) == kIOReturnSuccess,
+              infoOutput.result == 0
+        else { return false }
+
+        var writeInput = KeyData()
+        var writeOutput = KeyData()
+        writeInput.key = keyCode
+        writeInput.keyInfo = infoOutput.keyInfo
+        writeInput.data8 = 6
+        writeInput.bytes = Self.bytesTuple(Array(bytes.prefix(32)))
+
+        return call(input: &writeInput, output: &writeOutput) == kIOReturnSuccess
+            && writeOutput.result == 0
+    }
+
     private func call(input: inout KeyData, output: inout KeyData) -> kern_return_t {
         var outputSize = MemoryLayout<KeyData>.stride
         return IOConnectCallStructMethod(
@@ -325,5 +583,50 @@ private final class SMCReader {
 
     private static func bytesArray(_ bytes: SMCBytes) -> [UInt8] {
         withUnsafeBytes(of: bytes) { Array($0) }
+    }
+
+    private static func bytesTuple(_ bytes: [UInt8]) -> SMCBytes {
+        let padded = bytes + Array(repeating: 0, count: max(0, 32 - bytes.count))
+        return (
+            padded[0], padded[1], padded[2], padded[3],
+            padded[4], padded[5], padded[6], padded[7],
+            padded[8], padded[9], padded[10], padded[11],
+            padded[12], padded[13], padded[14], padded[15],
+            padded[16], padded[17], padded[18], padded[19],
+            padded[20], padded[21], padded[22], padded[23],
+            padded[24], padded[25], padded[26], padded[27],
+            padded[28], padded[29], padded[30], padded[31]
+        )
+    }
+
+    private static func encode(_ value: Double, as dataType: String) -> [UInt8]? {
+        switch dataType {
+        case "fpe2":
+            let raw = UInt16(max(0, min(value * 4, Double(UInt16.max))).rounded())
+            return [UInt8(raw >> 8), UInt8(raw & 0xff)]
+        case "ui8 ":
+            return [UInt8(max(0, min(value, 255)).rounded())]
+        case "ui16":
+            let raw = UInt16(max(0, min(value, Double(UInt16.max))).rounded())
+            return [UInt8(raw >> 8), UInt8(raw & 0xff)]
+        case "ui32":
+            let raw = UInt32(max(0, min(value, Double(UInt32.max))).rounded())
+            return [
+                UInt8((raw >> 24) & 0xff),
+                UInt8((raw >> 16) & 0xff),
+                UInt8((raw >> 8) & 0xff),
+                UInt8(raw & 0xff),
+            ]
+        case "flt ":
+            let raw = Float(value).bitPattern
+            return [
+                UInt8(raw & 0xff),
+                UInt8((raw >> 8) & 0xff),
+                UInt8((raw >> 16) & 0xff),
+                UInt8((raw >> 24) & 0xff),
+            ]
+        default:
+            return nil
+        }
     }
 }

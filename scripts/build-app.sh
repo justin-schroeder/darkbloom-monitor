@@ -18,8 +18,9 @@ swift build -c release
 
 echo "▸ assembling ${APP}"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/Helpers"
 cp .build/release/DarkbloomMenu "$APP/Contents/MacOS/DarkbloomMenu"
+cp .build/release/DarkbloomFanHelper "$APP/Contents/Library/Helpers/DarkbloomFanHelper"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${GITHUB_RUN_NUMBER:-1}" "$APP/Contents/Info.plist"
@@ -31,6 +32,10 @@ iconutil -c icns "$ICON_TMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon
 rm -rf "$ICON_TMP"
 
 echo "▸ codesign (${SIGN_IDENTITY})"
-codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP"
+CODESIGN_ARGS=(--force --deep --options runtime --sign "$SIGN_IDENTITY")
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    CODESIGN_ARGS+=(--timestamp)
+fi
+codesign "${CODESIGN_ARGS[@]}" "$APP"
 
 echo "✓ built: $APP (v${VERSION})"

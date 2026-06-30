@@ -7,6 +7,10 @@ final class MenuPreferencesSnapshotTests: XCTestCase {
 
         XCTAssertEqual(prefs.preset, .balanced)
         XCTAssertTrue(prefs.prewarmAfterRestart)
+        XCTAssertFalse(prefs.fanControl.enabled)
+        XCTAssertEqual(prefs.fanControl.sensor, .hottest)
+        XCTAssertEqual(prefs.fanControl.startTemperatureC, 70)
+        XCTAssertEqual(prefs.fanControl.fullSpeedTemperatureC, 90)
         XCTAssertEqual(prefs.visibleSections(from: MenuSection.allCases), MenuSection.allCases)
         XCTAssertEqual(prefs.defaultExpandedSections(from: MenuSection.allCases), [])
     }
@@ -41,11 +45,13 @@ final class MenuPreferencesSnapshotTests: XCTestCase {
     func testPresetApplicationPreservesNonLayoutPreferences() {
         var prefs = MenuPreferencesSnapshot.defaultValue
         prefs.prewarmAfterRestart = false
+        prefs.fanControl = .init(enabled: true, sensor: .gpu, startTemperatureC: 65, fullSpeedTemperatureC: 82)
 
         prefs.applyPreset(.operationsFocused)
 
         XCTAssertEqual(prefs.preset, .operationsFocused)
         XCTAssertFalse(prefs.prewarmAfterRestart)
+        XCTAssertEqual(prefs.fanControl, .init(enabled: true, sensor: .gpu, startTemperatureC: 65, fullSpeedTemperatureC: 82))
         XCTAssertTrue(prefs.isExpandedByDefault(.thisMac))
     }
 
@@ -84,6 +90,7 @@ final class MenuPreferencesStoreTests: XCTestCase {
         store.applyPreset(.compact)
         store.setPresentation(.expanded, for: .earnings)
         store.setPrewarmAfterRestart(false)
+        store.setFanControl(.init(enabled: true, sensor: .cpu, startTemperatureC: 68, fullSpeedTemperatureC: 88))
 
         let reloaded = MenuPreferencesStore(defaults: defaults)
 
@@ -91,6 +98,7 @@ final class MenuPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.snapshot.isExpandedByDefault(.earnings))
         XCTAssertFalse(reloaded.snapshot.isVisible(.activity))
         XCTAssertFalse(reloaded.snapshot.prewarmAfterRestart)
+        XCTAssertEqual(reloaded.snapshot.fanControl, .init(enabled: true, sensor: .cpu, startTemperatureC: 68, fullSpeedTemperatureC: 88))
     }
 
     func testLoadIgnoresUnknownPersistedSectionsAndPresentations() {

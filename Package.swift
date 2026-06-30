@@ -11,6 +11,10 @@ let package = Package(
             name: "DarkbloomMenu",
             dependencies: ["DarkbloomCore", "DarkbloomMenuSupport"]
         ),
+        .executableTarget(
+            name: "DarkbloomFanHelper",
+            dependencies: ["DarkbloomCore"]
+        ),
         .testTarget(
             name: "DarkbloomCoreTests",
             dependencies: ["DarkbloomCore"]

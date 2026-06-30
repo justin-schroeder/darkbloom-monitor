@@ -555,6 +555,57 @@ struct MenuView: View {
                     }
                 }
             }
+            if preferences.snapshot.fanControl.enabled {
+                fanControlRow
+            }
+        }
+    }
+
+    private var fanControlRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("Fan control")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 98, alignment: .leading)
+            Text(fanControlStatusText)
+                .font(.caption)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            if !state.fanHelperInstalled {
+                Button {
+                    state.installFanHelper()
+                } label: {
+                    if state.fanHelperInstallBusy {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Text("Install")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(state.fanHelperInstallBusy)
+            }
+        }
+    }
+
+    private var fanControlStatusText: String {
+        let settings = preferences.snapshot.fanControl
+        guard state.fanHelperInstalled else {
+            return "Install helper to enable cooling assist"
+        }
+        switch state.fanControlStatus {
+        case .automatic:
+            return "macOS automatic - cooling starts at \(Int(settings.startTemperatureC.rounded()))°"
+        case .manual(let percent, let temperatureC):
+            return String(format: "Cooling assist %.0f%% at %.0f°", percent * 100, temperatureC)
+        case .unavailable(let reason):
+            if reason == "install fan helper" {
+                return "Install helper to enable cooling assist"
+            }
+            return "Unavailable - \(reason)"
+        case .failed(let reason):
+            return "Failed - \(reason)"
         }
     }
 
@@ -715,8 +766,17 @@ struct MenuView: View {
 
             Spacer()
 
+            if let versionText {
+                Text(versionText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
             Menu {
-                SettingsLink {
+                Button {
+                    openPreferencesWindow()
+                } label: {
                     Label("Preferences...", systemImage: "gearshape")
                 }
                 Divider()
@@ -750,6 +810,17 @@ struct MenuView: View {
         }
         .controlSize(.small)
         .frame(maxWidth: .infinity)
+    }
+
+    private func openPreferencesWindow() {
+        DispatchQueue.main.async {
+            PreferencesWindow.show(preferences: preferences, state: state)
+        }
+    }
+
+    private var versionText: String? {
+        guard let version = state.daemon?.version, !version.isEmpty else { return nil }
+        return "darkbloom v\(version)"
     }
 
     private func openServingPicker(_ intent: ServingPickerIntent) {
@@ -1287,5 +1358,33 @@ private struct EmptyStateLine: View {
         Label(text, systemImage: "info.circle")
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+}
+
+@MainActor
+private enum PreferencesWindow {
+    private static var window: NSWindow?
+
+    static func show(preferences: MenuPreferencesStore, state: AppState) {
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let controller = NSHostingController(rootView: SettingsView(preferences: preferences, state: state))
+        let newWindow = NSWindow(contentViewController: controller)
+        newWindow.title = "Darkbloom Monitor Preferences"
+        newWindow.styleMask = [.titled, .closable, .miniaturizable]
+        newWindow.isReleasedWhenClosed = false
+        newWindow.level = .floating
+        newWindow.collectionBehavior = [.moveToActiveSpace]
+        newWindow.setContentSize(NSSize(width: 640, height: 520))
+        newWindow.center()
+        newWindow.setFrameAutosaveName("DarkbloomMonitorPreferences")
+        newWindow.makeKeyAndOrderFront(nil)
+        newWindow.orderFrontRegardless()
+        window = newWindow
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

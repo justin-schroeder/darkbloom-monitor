@@ -93,6 +93,43 @@ public enum MenuLayoutPreset: String, CaseIterable, Codable, Equatable, Identifi
     }
 }
 
+public enum FanControlSensor: String, CaseIterable, Codable, Equatable, Identifiable, Sendable {
+    case hottest
+    case cpu
+    case gpu
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .hottest: return "CPU or GPU"
+        case .cpu: return "CPU"
+        case .gpu: return "GPU"
+        }
+    }
+}
+
+public struct FanControlSettings: Codable, Equatable, Sendable {
+    public var enabled: Bool
+    public var sensor: FanControlSensor
+    public var startTemperatureC: Double
+    public var fullSpeedTemperatureC: Double
+
+    public init(
+        enabled: Bool = false,
+        sensor: FanControlSensor = .hottest,
+        startTemperatureC: Double = 70,
+        fullSpeedTemperatureC: Double = 90
+    ) {
+        self.enabled = enabled
+        self.sensor = sensor
+        self.startTemperatureC = startTemperatureC
+        self.fullSpeedTemperatureC = max(fullSpeedTemperatureC, startTemperatureC + 1)
+    }
+
+    public static let defaultValue = FanControlSettings()
+}
+
 public struct MenuPreferencesSnapshot: Equatable {
     public static let schemaVersion = 1
 
@@ -100,17 +137,20 @@ public struct MenuPreferencesSnapshot: Equatable {
     public var preset: MenuLayoutPreset
     public var sectionPresentations: [MenuSection: MenuSectionPresentation]
     public var prewarmAfterRestart: Bool
+    public var fanControl: FanControlSettings
 
     public init(
         schemaVersion: Int = Self.schemaVersion,
         preset: MenuLayoutPreset,
         sectionPresentations: [MenuSection: MenuSectionPresentation],
-        prewarmAfterRestart: Bool = true
+        prewarmAfterRestart: Bool = true,
+        fanControl: FanControlSettings = .defaultValue
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
         self.sectionPresentations = sectionPresentations
         self.prewarmAfterRestart = prewarmAfterRestart
+        self.fanControl = fanControl
     }
 
     public static var defaultValue: MenuPreferencesSnapshot {
@@ -138,7 +178,8 @@ public struct MenuPreferencesSnapshot: Equatable {
         return MenuPreferencesSnapshot(
             preset: preset,
             sectionPresentations: presentations,
-            prewarmAfterRestart: true
+            prewarmAfterRestart: true,
+            fanControl: .defaultValue
         )
     }
 
@@ -182,8 +223,10 @@ public struct MenuPreferencesSnapshot: Equatable {
             return
         }
         let oldPrewarm = prewarmAfterRestart
+        let oldFanControl = fanControl
         self = Self.defaults(for: newPreset)
         prewarmAfterRestart = oldPrewarm
+        fanControl = oldFanControl
     }
 
     public static func load(from defaults: UserDefaults) -> MenuPreferencesSnapshot {
@@ -205,6 +248,19 @@ public struct MenuPreferencesSnapshot: Equatable {
         if defaults.object(forKey: MenuPreferenceKey.prewarmAfterRestart) != nil {
             snapshot.prewarmAfterRestart = defaults.bool(forKey: MenuPreferenceKey.prewarmAfterRestart)
         }
+        snapshot.fanControl = FanControlSettings(
+            enabled: defaults.object(forKey: MenuPreferenceKey.fanControlEnabled) == nil
+                ? FanControlSettings.defaultValue.enabled
+                : defaults.bool(forKey: MenuPreferenceKey.fanControlEnabled),
+            sensor: defaults.string(forKey: MenuPreferenceKey.fanControlSensor)
+                .flatMap(FanControlSensor.init(rawValue:)) ?? FanControlSettings.defaultValue.sensor,
+            startTemperatureC: defaults.object(forKey: MenuPreferenceKey.fanControlStartTemperatureC) == nil
+                ? FanControlSettings.defaultValue.startTemperatureC
+                : defaults.double(forKey: MenuPreferenceKey.fanControlStartTemperatureC),
+            fullSpeedTemperatureC: defaults.object(forKey: MenuPreferenceKey.fanControlFullSpeedTemperatureC) == nil
+                ? FanControlSettings.defaultValue.fullSpeedTemperatureC
+                : defaults.double(forKey: MenuPreferenceKey.fanControlFullSpeedTemperatureC)
+        )
         if loadedPresentations,
            preset != .custom,
            snapshot.sectionPresentations != Self.defaults(for: preset).sectionPresentations {
@@ -220,6 +276,10 @@ public struct MenuPreferencesSnapshot: Equatable {
         defaults.set(max(schemaVersion, existingSchemaVersion ?? schemaVersion), forKey: MenuPreferenceKey.schemaVersion)
         defaults.set(preset.rawValue, forKey: MenuPreferenceKey.preset)
         defaults.set(prewarmAfterRestart, forKey: MenuPreferenceKey.prewarmAfterRestart)
+        defaults.set(fanControl.enabled, forKey: MenuPreferenceKey.fanControlEnabled)
+        defaults.set(fanControl.sensor.rawValue, forKey: MenuPreferenceKey.fanControlSensor)
+        defaults.set(fanControl.startTemperatureC, forKey: MenuPreferenceKey.fanControlStartTemperatureC)
+        defaults.set(fanControl.fullSpeedTemperatureC, forKey: MenuPreferenceKey.fanControlFullSpeedTemperatureC)
         var persisted = defaults.dictionary(forKey: MenuPreferenceKey.sectionPresentations) as? [String: String] ?? [:]
         persisted = persisted.filter { rawSection, rawPresentation in
             MenuSection(rawValue: rawSection) == nil
@@ -237,6 +297,10 @@ public enum MenuPreferenceKey {
     public static let preset = "dev.darkbloom.monitor.menu.preset.v1"
     public static let sectionPresentations = "dev.darkbloom.monitor.menu.sectionPresentations.v1"
     public static let prewarmAfterRestart = "dev.darkbloom.monitor.serving.prewarmAfterRestart.v1"
+    public static let fanControlEnabled = "dev.darkbloom.monitor.fans.enabled.v1"
+    public static let fanControlSensor = "dev.darkbloom.monitor.fans.sensor.v1"
+    public static let fanControlStartTemperatureC = "dev.darkbloom.monitor.fans.startTemperatureC.v1"
+    public static let fanControlFullSpeedTemperatureC = "dev.darkbloom.monitor.fans.fullSpeedTemperatureC.v1"
 }
 
 public final class MenuPreferencesStore: ObservableObject {
@@ -275,6 +339,12 @@ public final class MenuPreferencesStore: ObservableObject {
         snapshot = updated
     }
 
+    public func setFanControl(_ fanControl: FanControlSettings) {
+        var updated = snapshot
+        updated.fanControl = fanControl
+        snapshot = updated
+    }
+
     public func resetDefaults() {
         snapshot = .defaultValue
     }
@@ -284,7 +354,11 @@ public final class MenuPreferencesStore: ObservableObject {
             MenuPreferenceKey.schemaVersion,
             MenuPreferenceKey.preset,
             MenuPreferenceKey.sectionPresentations,
-            MenuPreferenceKey.prewarmAfterRestart
+            MenuPreferenceKey.prewarmAfterRestart,
+            MenuPreferenceKey.fanControlEnabled,
+            MenuPreferenceKey.fanControlSensor,
+            MenuPreferenceKey.fanControlStartTemperatureC,
+            MenuPreferenceKey.fanControlFullSpeedTemperatureC
         ].contains { defaults.object(forKey: $0) != nil }
     }
 }

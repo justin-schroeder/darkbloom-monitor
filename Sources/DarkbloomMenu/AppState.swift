@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Darwin
 import DarkbloomCore
+import DarkbloomMenuSupport
 import Foundation
 import IOKit
 
@@ -42,17 +43,71 @@ final class AppState: ObservableObject {
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
     @Published var hardwareMetrics: HardwareMetrics = .empty
+    @Published var fanControlStatus: FanControlStatus = .automatic
+    @Published var fanHelperInstalled = FanHelper.isInstalled
+    @Published var fanHelperInstallBusy = false
+    @Published var fanHelperInstallError: String?
 
     let physicalMemoryGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
     private var localTimer: Timer?
     private var remoteTimer: Timer?
+    private var preferencesCancellable: AnyCancellable?
     private let localSerial = AppState.machineSerialNumber()
     private var lastFreshDaemon: DaemonState?
     private var daemonReadMisses = 0
     private var hardwareRefreshInFlight = false
+    private var fanControlInFlight = false
+    private var fanControlSettings: FanControlSettings = .defaultValue
 
     private static let daemonReadMissTolerance = 2
+
+    func bindPreferences(_ preferences: MenuPreferencesStore) {
+        fanControlSettings = preferences.snapshot.fanControl
+        preferencesCancellable = preferences.$snapshot
+            .map(\.fanControl)
+            .removeDuplicates()
+            .sink { [weak self] settings in
+                Task { @MainActor in
+                    self?.fanControlSettings = settings
+                    if !settings.enabled {
+                        self?.restoreAutomaticFanControl()
+                    }
+                }
+            }
+    }
+
+    func restoreAutomaticFanControl() {
+        guard !fanControlInFlight else { return }
+        fanControlInFlight = true
+        Task {
+            let status = await Task.detached(priority: .utility) {
+                FanHelper.restoreAutomatic()
+            }.value
+            fanControlStatus = status
+            fanControlInFlight = false
+        }
+    }
+
+    func installFanHelper() {
+        guard !fanHelperInstallBusy else { return }
+        fanHelperInstallBusy = true
+        fanHelperInstallError = nil
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try FanHelper.install() }
+            }.value
+            switch result {
+            case .success:
+                fanHelperInstalled = FanHelper.isInstalled
+                fanHelperInstallError = nil
+            case .failure(let error):
+                fanHelperInstalled = FanHelper.isInstalled
+                fanHelperInstallError = error.localizedDescription
+            }
+            fanHelperInstallBusy = false
+        }
+    }
 
     func start() {
         refreshLocal()
@@ -99,6 +154,31 @@ final class AppState: ObservableObject {
             }.value
             hardwareMetrics = metrics
             hardwareRefreshInFlight = false
+            applyFanControl(metrics: metrics)
+        }
+    }
+
+    private func applyFanControl(metrics: HardwareMetrics) {
+        let settings = fanControlSettings
+        guard settings.enabled else {
+            fanControlStatus = .automatic
+            return
+        }
+        guard !fanControlInFlight else { return }
+        fanControlInFlight = true
+        Task {
+            let configuration = FanControlConfiguration(
+                enabled: settings.enabled,
+                sensor: settings.sensor.coreSelection,
+                startTemperatureC: settings.startTemperatureC,
+                fullSpeedTemperatureC: settings.fullSpeedTemperatureC
+            )
+            let status = await Task.detached(priority: .utility) {
+                FanHelper.apply(configuration: configuration)
+            }.value
+            fanControlStatus = status
+            fanHelperInstalled = FanHelper.isInstalled
+            fanControlInFlight = false
         }
     }
 
@@ -296,6 +376,16 @@ final class AppState: ObservableObject {
                   .takeRetainedValue() as? String
         else { return nil }
         return serial
+    }
+}
+
+private extension FanControlSensor {
+    var coreSelection: FanControlSensorSelection {
+        switch self {
+        case .hottest: return .hottest
+        case .cpu: return .cpu
+        case .gpu: return .gpu
+        }
     }
 }
 

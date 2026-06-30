@@ -5,13 +5,18 @@ import SwiftUI
 
 @main
 struct DarkbloomMenuApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var state: AppState
-    @StateObject private var preferences = MenuPreferencesStore()
+    @StateObject private var preferences: MenuPreferencesStore
 
     init() {
+        let prefs = MenuPreferencesStore()
         let s = AppState()
+        s.bindPreferences(prefs)
         s.start()
         _state = StateObject(wrappedValue: s)
+        _preferences = StateObject(wrappedValue: prefs)
+        appDelegate.preferences = prefs
     }
 
     var body: some Scene {
@@ -24,7 +29,17 @@ struct DarkbloomMenuApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(preferences: preferences)
+            SettingsView(preferences: preferences, state: state)
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var preferences: MenuPreferencesStore?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if preferences?.snapshot.fanControl.enabled == true {
+            _ = FanHelper.restoreAutomatic()
         }
     }
 }
