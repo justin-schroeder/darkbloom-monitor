@@ -12,7 +12,10 @@ tells you everything else.
 [![Release](https://img.shields.io/github/v/release/justin-schroeder/darkbloom-monitor?display_name=tag&sort=semver)](https://github.com/justin-schroeder/darkbloom-monitor/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
-<img src="docs/screenshot-v1.1.0.png" width="386" alt="Darkbloom Monitor dropdown showing earnings, provider status, hardware metrics, and an hourly jobs chart">
+<p>
+  <img src="docs/darkbloom-monitor.png" width="330" alt="Darkbloom Monitor menu showing earnings, provider status, hardware metrics, and the jobs chart">
+  <img src="docs/darkbloom-monitor-preferences.png" width="430" alt="Darkbloom Monitor preferences showing menu layout and cooling assist settings">
+</p>
 
 </div>
 
