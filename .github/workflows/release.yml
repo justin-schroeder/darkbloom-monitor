@@ -62,10 +62,27 @@ jobs:
       - name: Package .dmg
         run: ./scripts/make-dmg.sh "dist/Darkbloom-Monitor-${{ github.ref_name }}.dmg"
 
+      - name: Sign, notarize & verify .dmg
+        if: ${{ env.SIGN_IDENTITY != '' && env.HAS_NOTARY == 'true' }}
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          DMG="dist/Darkbloom-Monitor-${{ github.ref_name }}.dmg"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" --wait \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun stapler staple "$DMG"
+          codesign --verify --deep --strict --verbose=2 "dist/Darkbloom Monitor.app"
+          spctl --assess --type execute --verbose=4 "dist/Darkbloom Monitor.app"
+          codesign --verify --verbose=2 "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+
       - name: Changelog from conventional commits
         id: changelog
         run: |
-          PREV=$(git tag -l 'v*' --sort=-v:refname | sed -n 2p)
+          PREV=$(git describe --tags --match 'v*' --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
           RANGE=${PREV:+$PREV..}${{ github.ref_name }}
           {
             echo "## What's changed"
