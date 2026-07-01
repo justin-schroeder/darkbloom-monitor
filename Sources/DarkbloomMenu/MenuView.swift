@@ -12,6 +12,15 @@ private struct ContentHeightKey: PreferenceKey {
     }
 }
 
+private struct PanelContentSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        value = CGSize(width: max(value.width, next.width), height: max(value.height, next.height))
+    }
+}
+
 struct MenuView: View {
     private static let menuWidth: CGFloat = 360
     private static let normalMinimumScrollHeight: CGFloat = 390
@@ -26,6 +35,7 @@ struct MenuView: View {
     @State private var pickerOpen = false
     @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
+    @State private var panelContentSize: CGSize = .zero
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -72,7 +82,18 @@ struct MenuView: View {
                 .background(panelFill)
         }
         .frame(width: Self.menuWidth)
+        .fixedSize(horizontal: false, vertical: true)
         .background(panelFill)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: PanelContentSizeKey.self, value: proxy.size)
+            }
+        )
+        .background(MenuPanelWindowSizer(size: panelContentSize))
+        .onPreferenceChange(PanelContentSizeKey.self) { size in
+            guard size.width > 0, size.height > 0 else { return }
+            panelContentSize = CGSize(width: Self.menuWidth, height: ceil(size.height))
+        }
         .onAppear {
             expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
         }
@@ -955,6 +976,37 @@ private struct StatusLine: Identifiable {
     var multiline = false
 
     var id: String { systemImage + text }
+}
+
+private struct MenuPanelWindowSizer: NSViewRepresentable {
+    var size: CGSize
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let desired = NSSize(width: size.width, height: size.height)
+        guard desired.width > 0, desired.height > 0 else { return }
+
+        DispatchQueue.main.async { [weak nsView] in
+            guard let window = nsView?.window else { return }
+            let current = window.contentView?.bounds.size ?? .zero
+            guard abs(current.width - desired.width) > 0.5 || abs(current.height - desired.height) > 0.5 else {
+                return
+            }
+
+            let oldFrame = window.frame
+            var newFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: desired))
+            newFrame.origin.x = oldFrame.origin.x
+            newFrame.origin.y = oldFrame.maxY - newFrame.height
+
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                window.setFrame(newFrame, display: true)
+            }
+        }
+    }
 }
 
 private struct HealthSummary {
