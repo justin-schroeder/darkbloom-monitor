@@ -276,17 +276,17 @@ struct MenuView: View {
     }
 
     private var heroMetrics: [SummaryMetric] {
-        guard state.earnings != nil else {
+        guard let earnings = state.earnings else {
             return [
-                .init(label: "Today", value: "--"),
-                .init(label: "7 days", value: "--"),
-                .init(label: "Requests", value: "--")
+                .init(label: "Total", value: "--"),
+                .init(label: "Session", value: sessionRequestCountText),
+                .init(label: "Withdrawable", value: "--")
             ]
         }
         return [
-            .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
-            .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
-            .init(label: "Requests", value: recentRequestCountText)
+            .init(label: "Total", value: Fmt.usd(earnings.totalMicroUSD)),
+            .init(label: "Session", value: sessionRequestCountText),
+            .init(label: "Withdrawable", value: Fmt.usd(earnings.withdrawableBalanceMicroUSD))
         ]
     }
 
@@ -304,13 +304,15 @@ struct MenuView: View {
     private var secondaryStatusText: String {
         if let earnings = state.earnings {
             var parts = [
-                "Today \(Fmt.usd(state.windows.last24hMicroUSD))",
-                "\(recentRequestCountText) requests"
+                "Total \(Fmt.usd(earnings.totalMicroUSD))"
             ]
-            if let lastAccountJob {
-                parts.append("account last job \(Fmt.ago(lastAccountJob))")
+            if let stats = state.daemon?.stats {
+                parts.append("\(Fmt.count(stats.requestsServed)) session requests")
             } else if earnings.count > 0 {
-                parts.append("\(earnings.count) total jobs")
+                parts.append("\(totalJobCountText) total jobs")
+            }
+            if let lastRequest {
+                parts.append("\(lastRequest.isThisMac ? "last request" : "account last job") \(requestAgoText(lastRequest.date))")
             }
             return parts.joined(separator: " · ")
         }
@@ -429,7 +431,7 @@ struct MenuView: View {
         guard let earnings = state.earnings else {
             return state.remoteError == nil ? "Loading..." : "Unavailable"
         }
-        return "Balance \(Fmt.usd(earnings.availableBalanceMicroUSD)) · lifetime \(Fmt.usd(earnings.totalMicroUSD))"
+        return "Withdrawable \(Fmt.usd(earnings.withdrawableBalanceMicroUSD)) · lifetime \(Fmt.usd(earnings.totalMicroUSD))"
     }
 
     private var thisMacSubtitle: String {
@@ -442,18 +444,28 @@ struct MenuView: View {
     private var activitySubtitle: String {
         let jobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
         if recentEarningsHistoryIsCapped {
-            return "\(recentRequestCountText) sampled · history cap hit"
+            return "\(recentRequestCountText) sampled · API history capped"
         }
         return "\(recentRequestCountText) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
     }
 
     private var activityChartTitle: String {
-        recentEarningsHistoryIsCapped ? "Requests · latest sample" : "Requests · last 24 hours"
+        recentEarningsHistoryIsCapped ? "Requests · recent sample" : "Requests · last 24 hours"
     }
 
     private var recentRequestCountText: String {
         let count = Fmt.count(UInt64(state.windows.last24hJobs))
         return recentEarningsHistoryIsCapped ? "\(count)+" : count
+    }
+
+    private var sessionRequestCountText: String {
+        guard let requests = state.daemon?.stats?.requestsServed else { return "--" }
+        return Fmt.count(requests)
+    }
+
+    private var totalJobCountText: String {
+        guard let count = state.earnings?.count else { return "--" }
+        return Fmt.count(UInt64(max(0, count)))
     }
 
     private var recentEarningsHistoryIsCapped: Bool {
@@ -473,19 +485,29 @@ struct MenuView: View {
     private var earningsDetail: some View {
         Group {
             if let earnings = state.earnings {
-                MetricGrid(metrics: [
-                    .init(label: "Balance", value: Fmt.usd(earnings.availableBalanceMicroUSD)),
-                    .init(label: "Withdrawable", value: Fmt.usd(earnings.withdrawableBalanceMicroUSD)),
-                    .init(label: "Lifetime", value: Fmt.usd(earnings.totalMicroUSD)),
-                    .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
-                    .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
-                    .init(label: "Requests today", value: recentRequestCountText),
-                    .init(label: "Total jobs", value: "\(earnings.count)")
-                ])
+                MetricGrid(metrics: earningsMetrics(for: earnings))
             } else {
                 EmptyStateLine(text: state.remoteError ?? "Loading earnings...")
             }
         }
+    }
+
+    private func earningsMetrics(for earnings: CoordinatorAPI.AccountEarnings) -> [MetricItem] {
+        var metrics: [MetricItem] = [
+            .init(label: "Balance", value: Fmt.usd(earnings.availableBalanceMicroUSD)),
+            .init(label: "Withdrawable", value: Fmt.usd(earnings.withdrawableBalanceMicroUSD)),
+            .init(label: "Lifetime", value: Fmt.usd(earnings.totalMicroUSD)),
+            .init(label: "Total jobs", value: totalJobCountText)
+        ]
+        if recentEarningsHistoryIsCapped {
+            metrics.append(.init(label: "Recent sample", value: recentRequestCountText))
+            metrics.append(.init(label: "Sample value", value: Fmt.usd(state.windows.last24hMicroUSD)))
+        } else {
+            metrics.append(.init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)))
+            metrics.append(.init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)))
+            metrics.append(.init(label: "Requests today", value: recentRequestCountText))
+        }
+        return metrics
     }
 
     @ViewBuilder
