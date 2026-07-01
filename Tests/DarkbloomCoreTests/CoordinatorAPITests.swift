@@ -37,6 +37,8 @@ final class CoordinatorAPITests: XCTestCase {
         XCTAssertEqual(acct.availableBalanceMicroUSD, 21_949)
         XCTAssertEqual(acct.totalMicroUSD, 21_949)
         XCTAssertEqual(acct.count, 221)
+        XCTAssertEqual(acct.historyLimit, 5)
+        XCTAssertEqual(acct.recentCount, 2)
         XCTAssertEqual(acct.earnings.count, 2)
         XCTAssertEqual(acct.earnings[0].amountMicroUSD, 144)
         XCTAssertEqual(acct.earnings[0].model, "gpt-oss-20b")

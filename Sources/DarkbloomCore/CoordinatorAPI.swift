@@ -45,6 +45,8 @@ public struct CoordinatorAPI {
         public var earnings: [Earning]
         public var totalMicroUSD: Int64
         public var count: Int64
+        public var historyLimit: Int?
+        public var recentCount: Int?
         public var availableBalanceMicroUSD: Int64
         public var withdrawableBalanceMicroUSD: Int64
 
@@ -52,6 +54,8 @@ public struct CoordinatorAPI {
             case earnings, count
             case accountID = "account_id"
             case totalMicroUSD = "total_micro_usd"
+            case historyLimit = "history_limit"
+            case recentCount = "recent_count"
             case availableBalanceMicroUSD = "available_balance_micro_usd"
             case withdrawableBalanceMicroUSD = "withdrawable_balance_micro_usd"
         }

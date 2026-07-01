@@ -41,6 +41,7 @@ struct MenuView: View {
                         metrics: heroMetrics,
                         lines: statusLines,
                         hourlyJobs: state.hourlyJobs,
+                        activityTitle: activityChartTitle,
                         activitySubtitle: activitySubtitle,
                         activityChartAccessibilityValue: activityChartAccessibilityValue
                     )
@@ -279,13 +280,13 @@ struct MenuView: View {
             return [
                 .init(label: "Today", value: "--"),
                 .init(label: "7 days", value: "--"),
-                .init(label: "Jobs", value: "--")
+                .init(label: "Requests", value: "--")
             ]
         }
         return [
             .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
             .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
-            .init(label: "Jobs", value: "\(state.windows.last24hJobs)")
+            .init(label: "Requests", value: recentRequestCountText)
         ]
     }
 
@@ -304,7 +305,7 @@ struct MenuView: View {
         if let earnings = state.earnings {
             var parts = [
                 "Today \(Fmt.usd(state.windows.last24hMicroUSD))",
-                "\(state.windows.last24hJobs) jobs"
+                "\(recentRequestCountText) requests"
             ]
             if let lastAccountJob {
                 parts.append("account last job \(Fmt.ago(lastAccountJob))")
@@ -440,7 +441,28 @@ struct MenuView: View {
 
     private var activitySubtitle: String {
         let jobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
-        return "\(jobs) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
+        if recentEarningsHistoryIsCapped {
+            return "\(recentRequestCountText) sampled · history cap hit"
+        }
+        return "\(recentRequestCountText) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
+    }
+
+    private var activityChartTitle: String {
+        recentEarningsHistoryIsCapped ? "Requests · latest sample" : "Requests · last 24 hours"
+    }
+
+    private var recentRequestCountText: String {
+        let count = Fmt.count(UInt64(state.windows.last24hJobs))
+        return recentEarningsHistoryIsCapped ? "\(count)+" : count
+    }
+
+    private var recentEarningsHistoryIsCapped: Bool {
+        guard let earnings = state.earnings,
+              let historyLimit = earnings.historyLimit,
+              earnings.earnings.count >= historyLimit,
+              let oldest = earnings.earnings.map(\.createdAt).min()
+        else { return false }
+        return oldest > Date().addingTimeInterval(-86_400)
     }
 
     private var fleetSubtitle: String {
@@ -457,7 +479,7 @@ struct MenuView: View {
                     .init(label: "Lifetime", value: Fmt.usd(earnings.totalMicroUSD)),
                     .init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)),
                     .init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)),
-                    .init(label: "Jobs today", value: "\(state.windows.last24hJobs)"),
+                    .init(label: "Requests today", value: recentRequestCountText),
                     .init(label: "Total jobs", value: "\(earnings.count)")
                 ])
             } else {
@@ -889,11 +911,11 @@ struct MenuView: View {
     }
 
     private var activityChartAccessibilityValue: String {
-        let totalJobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
         guard let peak = state.hourlyJobs.max(by: { $0.jobs < $1.jobs }) else {
             return "No requests in the last 24 hours."
         }
-        return "\(totalJobs) \(totalJobs == 1 ? "request" : "requests") in the last 24 hours. Peak hour had \(peak.jobs) \(peak.jobs == 1 ? "request" : "requests")."
+        let scope = recentEarningsHistoryIsCapped ? "in the latest capped sample" : "in the last 24 hours"
+        return "\(recentRequestCountText) requests \(scope). Peak hour had \(peak.jobs) \(peak.jobs == 1 ? "request" : "requests")."
     }
 }
 
@@ -934,6 +956,7 @@ private struct StatusHeroView: View {
     var metrics: [SummaryMetric]
     var lines: [StatusLine]
     var hourlyJobs: [HourBucket]
+    var activityTitle: String
     var activitySubtitle: String
     var activityChartAccessibilityValue: String
 
@@ -970,7 +993,7 @@ private struct StatusHeroView: View {
             if !hourlyJobs.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
-                        Text("Requests · last 24 hours")
+                        Text(activityTitle)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 0)
