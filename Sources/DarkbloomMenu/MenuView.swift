@@ -39,7 +39,10 @@ struct MenuView: View {
                         title: primaryStatusText,
                         subtitle: secondaryStatusText,
                         metrics: heroMetrics,
-                        lines: statusLines
+                        lines: statusLines,
+                        hourlyJobs: state.hourlyJobs,
+                        activitySubtitle: activitySubtitle,
+                        activityChartAccessibilityValue: activityChartAccessibilityValue
                     )
 
                     ForEach(visibleMenuSections) { section in
@@ -437,7 +440,7 @@ struct MenuView: View {
 
     private var activitySubtitle: String {
         let jobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
-        return "\(jobs) jobs in the last 24 hours"
+        return "\(jobs) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
     }
 
     private var fleetSubtitle: String {
@@ -618,35 +621,11 @@ struct MenuView: View {
     @ViewBuilder
     private var jobsChart: some View {
         if !state.hourlyJobs.isEmpty {
-            Chart(state.hourlyJobs) { bucket in
-                BarMark(
-                    x: .value("Hour", bucket.hour, unit: .hour),
-                    y: .value("Jobs", bucket.jobs),
-                    width: .ratio(0.68)
-                )
-                .foregroundStyle(Color.green.gradient)
-                .cornerRadius(1.5)
-            }
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .hour, count: 6)) {
-                    AxisGridLine().foregroundStyle(.quaternary)
-                    AxisValueLabel(format: .dateTime.hour())
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
-                    AxisGridLine().foregroundStyle(.quaternary)
-                    AxisValueLabel()
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .frame(height: 86)
-            .padding(.top, 2)
-            .accessibilityLabel("Paid jobs by hour")
-            .accessibilityValue(activityChartAccessibilityValue)
+            HourlyRequestsChart(
+                buckets: state.hourlyJobs,
+                height: 86,
+                accessibilityValue: activityChartAccessibilityValue
+            )
         }
     }
 
@@ -912,9 +891,9 @@ struct MenuView: View {
     private var activityChartAccessibilityValue: String {
         let totalJobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
         guard let peak = state.hourlyJobs.max(by: { $0.jobs < $1.jobs }) else {
-            return "No paid jobs in the last 24 hours."
+            return "No requests in the last 24 hours."
         }
-        return "\(totalJobs) paid jobs in the last 24 hours. Peak hour had \(peak.jobs) jobs."
+        return "\(totalJobs) \(totalJobs == 1 ? "request" : "requests") in the last 24 hours. Peak hour had \(peak.jobs) \(peak.jobs == 1 ? "request" : "requests")."
     }
 }
 
@@ -954,6 +933,9 @@ private struct StatusHeroView: View {
     var subtitle: String
     var metrics: [SummaryMetric]
     var lines: [StatusLine]
+    var hourlyJobs: [HourBucket]
+    var activitySubtitle: String
+    var activityChartAccessibilityValue: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -985,6 +967,27 @@ private struct StatusHeroView: View {
                 }
             }
 
+            if !hourlyJobs.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text("Requests · last 24 hours")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Text(activitySubtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    HourlyRequestsChart(
+                        buckets: hourlyJobs,
+                        height: 58,
+                        accessibilityValue: activityChartAccessibilityValue
+                    )
+                }
+                .padding(.top, 1)
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(lines) { line in
                     HStack(alignment: .top, spacing: 6) {
@@ -1009,6 +1012,44 @@ private struct StatusHeroView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
+    }
+}
+
+private struct HourlyRequestsChart: View {
+    var buckets: [HourBucket]
+    var height: CGFloat
+    var accessibilityValue: String
+
+    var body: some View {
+        Chart(buckets) { bucket in
+            BarMark(
+                x: .value("Hour", bucket.hour, unit: .hour),
+                y: .value("Requests", bucket.jobs),
+                width: .ratio(0.68)
+            )
+            .foregroundStyle(Color.green.gradient)
+            .cornerRadius(1.5)
+        }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .hour, count: 6)) {
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel(format: .dateTime.hour())
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel()
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(height: height)
+        .padding(.top, 2)
+        .accessibilityLabel("Requests by hour")
+        .accessibilityValue(accessibilityValue)
     }
 }
 
