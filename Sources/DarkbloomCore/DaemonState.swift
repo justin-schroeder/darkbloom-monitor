@@ -99,6 +99,7 @@ public enum DarkbloomPaths {
     public static let home = FileManager.default.homeDirectoryForCurrentUser
     public static let stateDir = home.appendingPathComponent(".darkbloom")
     public static let daemonState = stateDir.appendingPathComponent("daemon-state.json")
+    public static let localEndpoint = stateDir.appendingPathComponent("local.json")
     public static let authToken = stateDir.appendingPathComponent("auth_token")
     public static let cli = stateDir.appendingPathComponent("bin/darkbloom")
     public static let launchAgentPlist = home

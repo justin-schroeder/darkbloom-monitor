@@ -106,8 +106,49 @@ final class CoordinatorAPITests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "gemma-4-26b")
         XCTAssertEqual(json["stream"] as? Bool, false)
+        XCTAssertEqual(json["max_tokens"] as? Int, 4)
         XCTAssertEqual(json["provider_serial"] as? String, "SER1")
         let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
         XCTAssertEqual(messages, [["role": "user", "content": "Hello"]])
+    }
+
+    func testDecodesLocalEndpoint() throws {
+        let json = """
+        {
+          "api_key": "dk-local-test",
+          "base_url": "http://127.0.0.1:8000/v1",
+          "host": "127.0.0.1",
+          "pid": 77287,
+          "port": 8000,
+          "updated_at": "2026-07-02T18:15:35Z",
+          "version": "0.6.30"
+        }
+        """.data(using: .utf8)!
+
+        let endpoint = try CoordinatorAPI.decodeLocalEndpoint(json)
+        XCTAssertEqual(endpoint.apiKey, "dk-local-test")
+        XCTAssertEqual(endpoint.baseURL.absoluteString, "http://127.0.0.1:8000/v1")
+        XCTAssertEqual(endpoint.pid, 77287)
+    }
+
+    func testLocalWarmupRequestUsesLocalEndpoint() throws {
+        let endpoint = CoordinatorAPI.LocalEndpoint(
+            apiKey: "dk-local-test",
+            baseURL: URL(string: "http://127.0.0.1:8000/v1")!,
+            pid: 77287
+        )
+
+        let req = try CoordinatorAPI.localWarmupRequest(endpoint: endpoint, model: "gpt-oss-20b")
+
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer dk-local-test")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(req.url?.absoluteString, "http://127.0.0.1:8000/v1/chat/completions")
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "gpt-oss-20b")
+        XCTAssertEqual(json["stream"] as? Bool, false)
+        XCTAssertEqual(json["max_tokens"] as? Int, 4)
+        XCTAssertNil(json["provider_serial"])
     }
 }

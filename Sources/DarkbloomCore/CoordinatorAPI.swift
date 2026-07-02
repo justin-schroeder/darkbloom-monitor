@@ -61,6 +61,22 @@ public struct CoordinatorAPI {
         }
     }
 
+    public struct LocalEndpoint: Decodable, Equatable {
+        public var apiKey: String
+        public var baseURL: URL
+        public var pid: Int32?
+
+        enum CodingKeys: String, CodingKey {
+            case pid
+            case apiKey = "api_key"
+            case baseURL = "base_url"
+        }
+
+        var isUsable: Bool {
+            !apiKey.isEmpty && baseURL.scheme != nil && baseURL.host != nil
+        }
+    }
+
     public struct AttestedProvider: Codable {
         public var providerID: String
         public var chipName: String
@@ -129,13 +145,20 @@ public struct CoordinatorAPI {
     public enum APIError: LocalizedError {
         case noToken
         case unauthorized
-        case http(Int)
+        case http(Int, String?)
+        case noLocalEndpoint
 
         public var errorDescription: String? {
             switch self {
             case .noToken: return "Not logged in — run `darkbloom login`"
             case .unauthorized: return "Auth token rejected — run `darkbloom login`"
-            case .http(let code): return "Coordinator returned HTTP \(code)"
+            case .http(let code, let message):
+                if let message, !message.isEmpty {
+                    return "Request returned HTTP \(code) — \(message)"
+                }
+                return "Request returned HTTP \(code)"
+            case .noLocalEndpoint:
+                return "Local endpoint unavailable — restart with local prewarm support"
             }
         }
     }
@@ -149,10 +172,12 @@ public struct CoordinatorAPI {
         var model: String
         var messages: [ChatMessage]
         var stream: Bool
-        var providerSerial: String
+        var maxTokens: Int?
+        var providerSerial: String?
 
         enum CodingKeys: String, CodingKey {
             case model, messages, stream
+            case maxTokens = "max_tokens"
             case providerSerial = "provider_serial"
         }
     }
@@ -175,6 +200,10 @@ public struct CoordinatorAPI {
 
     public static func decodeAccountEarnings(_ data: Data) throws -> AccountEarnings {
         try decoder().decode(AccountEarnings.self, from: data)
+    }
+
+    public static func decodeLocalEndpoint(_ data: Data) throws -> LocalEndpoint {
+        try decoder().decode(LocalEndpoint.self, from: data)
     }
 
     /// Tolerates both a bare array and a `{"providers": [...]}` wrapper, and
@@ -214,7 +243,7 @@ public struct CoordinatorAPI {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw APIError.unauthorized }
-        guard (200..<300).contains(code) else { throw APIError.http(code) }
+        guard (200..<300).contains(code) else { throw APIError.http(code, errorMessage(from: data)) }
         return data
     }
 
@@ -230,16 +259,76 @@ public struct CoordinatorAPI {
             model: model,
             messages: [.init(role: "user", content: "Hello")],
             stream: false,
+            maxTokens: 4,
             providerSerial: serialNumber
         ))
         return req
     }
 
+    static func localWarmupRequest(endpoint: LocalEndpoint, model: String) throws -> URLRequest {
+        let url = endpoint.baseURL.appendingPathComponent("chat/completions")
+        var req = URLRequest(url: url, timeoutInterval: 240)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(endpoint.apiKey)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONEncoder().encode(WarmupRequestBody(
+            model: model,
+            messages: [.init(role: "user", content: "Reply with ok.")],
+            stream: false,
+            maxTokens: 4,
+            providerSerial: nil
+        ))
+        return req
+    }
+
     private static func send(_ request: URLRequest) async throws {
-        let (_, resp) = try await URLSession.shared.data(for: request)
+        let (data, resp) = try await URLSession.shared.data(for: request)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw APIError.unauthorized }
-        guard (200..<300).contains(code) else { throw APIError.http(code) }
+        guard (200..<300).contains(code) else { throw APIError.http(code, errorMessage(from: data)) }
+    }
+
+    private static func errorMessage(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let message = object["message"] as? String, !message.isEmpty {
+                return message
+            }
+            if let error = object["error"] as? String, !error.isEmpty {
+                return error
+            }
+            if let error = object["error"] as? [String: Any] {
+                if let message = error["message"] as? String, !message.isEmpty {
+                    return message
+                }
+                if let code = error["code"] as? String, !code.isEmpty {
+                    return code
+                }
+            }
+        }
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(240))
+    }
+
+    private static func currentLocalEndpoint() -> LocalEndpoint? {
+        guard let data = try? Data(contentsOf: DarkbloomPaths.localEndpoint),
+              let endpoint = try? decodeLocalEndpoint(data),
+              endpoint.isUsable,
+              let daemon = DarkbloomPaths.readDaemonState(),
+              daemon.isFresh(),
+              daemon.processAlive
+        else { return nil }
+        if let pid = endpoint.pid, pid != daemon.pid { return nil }
+        return endpoint
+    }
+
+    private static func waitForCurrentLocalEndpoint(seconds: Int = 20) async -> LocalEndpoint? {
+        for _ in 0...seconds {
+            if let endpoint = currentLocalEndpoint() { return endpoint }
+            try? await Task.sleep(for: .seconds(1))
+        }
+        return nil
     }
 
     /// GET /v1/provider/account-earnings — lifetime totals, balance, and recent
@@ -268,9 +357,14 @@ public struct CoordinatorAPI {
     /// POST /v1/chat/completions once per model, pinned to this Mac's serial,
     /// so the provider loads each selected model after restart.
     public static func warmupMachine(serialNumber: String, models: [String]) async throws {
-        guard let token = DarkbloomPaths.readAuthToken() else { throw APIError.noToken }
-        for model in models {
-            try await send(warmupRequest(serialNumber: serialNumber, model: model, token: token))
+        if let endpoint = await waitForCurrentLocalEndpoint() {
+            for model in models {
+                try await send(localWarmupRequest(endpoint: endpoint, model: model))
+            }
+            return
         }
+
+        _ = serialNumber
+        throw APIError.noLocalEndpoint
     }
 }

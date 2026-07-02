@@ -267,7 +267,8 @@ final class AppState: ObservableObject {
     /// when already running.
     func startServing(models: [String], prewarm: Bool) {
         guard !models.isEmpty else { return }
-        run(["start"] + models.flatMap { ["--model", $0] },
+        let localEndpointArgs = prewarm ? ["--local-endpoint"] : []
+        run(["start"] + localEndpointArgs + models.flatMap { ["--model", $0] },
             expectRunning: true,
             requestedModels: models,
             prewarmModels: prewarm ? models : [])
