@@ -43,6 +43,7 @@ final class AppState: ObservableObject {
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
     @Published var hardwareMetrics: HardwareMetrics = .empty
+    @Published var thermalState = ThermalState(ProcessInfo.processInfo.thermalState)
     @Published var fanControlStatus: FanControlStatus = .automatic
     @Published var fanHelperInstalled = FanHelper.isInstalled
     @Published var fanHelperInstallBusy = false
@@ -54,6 +55,7 @@ final class AppState: ObservableObject {
     private var localTimer: Timer?
     private var remoteTimer: Timer?
     private var preferencesCancellable: AnyCancellable?
+    private var thermalCancellable: AnyCancellable?
     private let localSerial = AppState.machineSerialNumber()
     private var lastFreshDaemon: DaemonState?
     private var daemonReadMisses = 0
@@ -111,6 +113,14 @@ final class AppState: ObservableObject {
     }
 
     func start() {
+        thermalState = ThermalState(ProcessInfo.processInfo.thermalState)
+        thermalCancellable = NotificationCenter.default
+            .publisher(for: ProcessInfo.thermalStateDidChangeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.thermalState = ThermalState(ProcessInfo.processInfo.thermalState)
+                }
+            }
         refreshLocal()
         refreshHardwareMetrics()
         Task { await refreshRemote() }

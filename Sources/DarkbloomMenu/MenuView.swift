@@ -187,6 +187,8 @@ struct MenuView: View {
             MonitorSectionCard(
                 section: section,
                 subtitle: healthSummary.text,
+                statusSystemImage: healthSummary.showsIndicator ? healthSummary.systemImage : nil,
+                statusTint: healthSummary.showsIndicator ? healthSummary.tint : nil,
                 isExpanded: expandedSections.contains(section),
                 isForcedVisible: forcedVisibleSections.contains(section),
                 toggle: { toggle(section) }
@@ -401,10 +403,10 @@ struct MenuView: View {
     }
 
     private var healthSummary: HealthSummary {
+        let thermal = state.thermalState
         var warnings: [String] = []
-        if let thermal = state.daemon?.system?.thermalState,
-           !["nominal", "fair"].contains(thermal.lowercased()) {
-            warnings.append("Thermal \(thermal.capitalized)")
+        if thermal.isElevated {
+            warnings.append("Thermal \(thermal.displayName.lowercased())")
         }
         if let pressure = state.daemon?.system?.memoryPressure, pressure > 0.80 {
             warnings.append("Pressure \(percentText(pressure))")
@@ -419,11 +421,18 @@ struct MenuView: View {
             warnings.append("GPU \(temperatureText(gpu))")
         }
         if let first = warnings.first {
+            let fairOnly = thermal == .fair && warnings.count == 1
+            let tint: Color
+            switch thermal {
+            case .critical: tint = .red
+            case .fair where fairOnly: tint = .yellow
+            default: tint = .orange
+            }
             return .init(
                 text: warnings.count > 1 ? "\(first) +\(warnings.count - 1)" : first,
-                tint: .orange,
-                systemImage: "exclamationmark.triangle.fill",
-                kind: .warning
+                tint: tint,
+                systemImage: thermal.isElevated ? thermal.menuSystemImage : "exclamationmark.triangle.fill",
+                kind: fairOnly ? .caution : .warning
             )
         }
         if state.hardwareMetrics == .empty && state.daemon?.system == nil {
@@ -610,11 +619,12 @@ struct MenuView: View {
                 TemperatureTile(metrics: state.hardwareMetrics)
             }
 
-            if let system = state.daemon?.system {
-                VStack(spacing: 5) {
-                    if let thermal = system.thermalState {
-                        InfoRow("Thermal", thermal.capitalized)
-                    }
+            VStack(spacing: 5) {
+                thermalStateRow
+                if let daemonThermal = daemonThermalState, daemonThermal != state.thermalState {
+                    InfoRow("Provider reports", daemonThermal.displayName, detail: "last heartbeat")
+                }
+                if let system = state.daemon?.system {
                     if let cpu = system.cpuUsage {
                         InfoRow("CPU load", percentText(cpu))
                     }
@@ -627,6 +637,31 @@ struct MenuView: View {
                 fanControlRow
             }
         }
+    }
+
+    private var daemonThermalState: ThermalState? {
+        state.daemon?.system?.thermalState.flatMap(ThermalState.init(daemonString:))
+    }
+
+    private var thermalStateRow: some View {
+        let thermal = state.thermalState
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("Thermal state")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 98, alignment: .leading)
+            Image(systemName: thermal.menuSystemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(thermal.menuTint)
+            Text(thermal.displayName)
+                .font(.caption.weight(thermal.isElevated ? .semibold : .regular))
+            Text(thermal.impactText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .help("macOS thermal pressure. Above nominal the coordinator reduces this Mac's serving health.")
     }
 
     private var fanControlRow: some View {
@@ -971,6 +1006,35 @@ struct MenuView: View {
     }
 }
 
+private extension ThermalState {
+    var menuTint: Color {
+        switch self {
+        case .nominal: return .green
+        case .fair: return .yellow
+        case .serious: return .orange
+        case .critical: return .red
+        }
+    }
+
+    var menuSystemImage: String {
+        switch self {
+        case .nominal: return "thermometer.low"
+        case .fair: return "thermometer.medium"
+        case .serious: return "thermometer.high"
+        case .critical: return "flame.fill"
+        }
+    }
+
+    var impactText: String {
+        switch self {
+        case .nominal: return "full serving health"
+        case .fair: return "serving health ×0.8"
+        case .serious: return "serving health ×0.4"
+        case .critical: return "routing blocked"
+        }
+    }
+}
+
 private struct SummaryMetric: Identifiable {
     var label: String
     var value: String
@@ -1022,7 +1086,14 @@ private struct HealthSummary {
     enum Kind {
         case normal
         case neutral
+        // Thermal fair only: tinted indicator, but not treated as a warning
+        // that force-unhides the health section.
+        case caution
         case warning
+    }
+
+    var showsIndicator: Bool {
+        kind == .caution || kind == .warning
     }
 
     var text: String
@@ -1213,6 +1284,8 @@ private struct FloatingActionButtonStyle: ButtonStyle {
 private struct MonitorSectionCard<Content: View>: View {
     var section: MenuSection
     var subtitle: String
+    var statusSystemImage: String? = nil
+    var statusTint: Color? = nil
     var isExpanded: Bool
     var isForcedVisible: Bool
     var toggle: () -> Void
@@ -1248,6 +1321,12 @@ private struct MonitorSectionCard<Content: View>: View {
                             .help(subtitle)
                     }
                     Spacer(minLength: 0)
+                    if let statusSystemImage, let statusTint {
+                        Image(systemName: statusSystemImage)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(statusTint)
+                            .accessibilityHidden(true)
+                    }
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.tertiary)
@@ -1259,7 +1338,11 @@ private struct MonitorSectionCard<Content: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(section.title)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityValue(
+                statusSystemImage == nil
+                    ? (isExpanded ? "Expanded" : "Collapsed")
+                    : "\(subtitle). \(isExpanded ? "Expanded" : "Collapsed")"
+            )
             .accessibilityHint("Press to \(isExpanded ? "collapse" : "expand") this section.")
 
             if isExpanded {
