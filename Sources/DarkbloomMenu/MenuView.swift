@@ -1314,12 +1314,7 @@ private struct HourlyActivityChart: View {
     var accessibilityValue: String
 
     @State private var selectedHour: Date?
-    @State private var hoverLocation: CGPoint?
-
-    private var selectedBucket: HourBucket? {
-        guard let selectedHour else { return nil }
-        return buckets.first { $0.hour == selectedHour }
-    }
+    @StateObject private var tooltipPresenter = ChartTooltipPanelPresenter()
 
     private var yUpperBound: Double {
         let peak = buckets.map(displayedValue).max() ?? 0
@@ -1442,33 +1437,28 @@ private struct HourlyActivityChart: View {
                                     return
                                 }
                                 selectedHour = bucket.hour
-                                hoverLocation = location
+                                tooltipPresenter.show(at: NSEvent.mouseLocation) {
+                                    hoverTooltip(for: bucket)
+                                }
                             case .ended:
                                 clearHover()
                             }
                         }
-
-                    if let selectedBucket, let hoverLocation {
-                        hoverTooltip(for: selectedBucket)
-                            .frame(width: 126)
-                            .position(
-                                x: tooltipX(for: hoverLocation, width: geometry.size.width),
-                                y: hoverLocation.y - (metric == .earnings ? 38 : 24)
-                            )
-                            .allowsHitTesting(false)
-                    }
                 }
             }
         }
         .frame(height: height)
         .padding(.top, 2)
+        .onDisappear {
+            clearHover()
+        }
         .accessibilityLabel("\(metric.axisTitle) by hour")
         .accessibilityValue(accessibilityValue)
     }
 
     private func clearHover() {
         selectedHour = nil
-        hoverLocation = nil
+        tooltipPresenter.hide()
     }
 
     private func hoveredBucket(at location: CGPoint, proxy: ChartProxy) -> HourBucket? {
@@ -1497,15 +1487,6 @@ private struct HourlyActivityChart: View {
               let baseline = proxy.position(forY: 0)
         else { return nil }
         return (min(top, baseline)...max(top, baseline)).contains(location.y) ? nearest.0 : nil
-    }
-
-    private func tooltipX(for location: CGPoint, width: CGFloat) -> CGFloat {
-        let halfWidth: CGFloat = 63
-        let offset: CGFloat = 10
-        if location.x + offset + halfWidth <= width {
-            return location.x + offset + halfWidth
-        }
-        return location.x - offset - halfWidth
     }
 
     @ViewBuilder
