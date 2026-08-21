@@ -102,6 +102,8 @@ public enum DarkbloomPaths {
     public static let localEndpoint = stateDir.appendingPathComponent("local.json")
     public static let authToken = stateDir.appendingPathComponent("auth_token")
     public static let cli = stateDir.appendingPathComponent("bin/darkbloom")
+    public static let activityHistory = home
+        .appendingPathComponent("Library/Application Support/Darkbloom Monitor/activity-history.json")
     public static let launchAgentPlist = home
         .appendingPathComponent("Library/LaunchAgents/io.darkbloom.provider.plist")
 

@@ -34,8 +34,9 @@ final class AppState: ObservableObject {
     @Published var daemon: DaemonState?
     @Published var earnings: CoordinatorAPI.AccountEarnings?
     @Published var fleet: [FleetMachine] = []
-    @Published var windows = EarningsWindows()
-    @Published var hourlyJobs: [HourBucket] = []
+    @Published var windows: EarningsWindows
+    @Published var hourlyJobs: [HourBucket]
+    @Published var activityHistory: ActivityHistory
     @Published var remoteError: String?
     @Published var controlBusy = false
     @Published var controlError: String?
@@ -62,8 +63,17 @@ final class AppState: ObservableObject {
     private var hardwareRefreshInFlight = false
     private var fanControlInFlight = false
     private var fanControlSettings: FanControlSettings = .defaultValue
+    private let activityHistoryURL: URL
 
     private static let daemonReadMissTolerance = 2
+
+    init(activityHistoryURL: URL = DarkbloomPaths.activityHistory) {
+        self.activityHistoryURL = activityHistoryURL
+        let history = ActivityHistoryStore.load(from: activityHistoryURL)
+        activityHistory = history
+        windows = history.windows()
+        hourlyJobs = history.accountID == nil ? [] : history.hourlyBuckets()
+    }
 
     func bindPreferences(_ preferences: MenuPreferencesStore) {
         fanControlSettings = preferences.snapshot.fanControl
@@ -242,14 +252,21 @@ final class AppState: ObservableObject {
                 remoteError = "Fleet unavailable — \(error.localizedDescription)"
             }
             earnings = acct
-            windows = EarningsMath.windows(acct.earnings)
-            hourlyJobs = EarningsMath.hourlyBuckets(acct.earnings)
+            let now = Date()
+            activityHistory.ingest(
+                accountID: acct.accountID,
+                entries: acct.earnings,
+                historyLimit: acct.historyLimit,
+                totalCount: acct.count,
+                now: now
+            )
+            windows = activityHistory.windows(now: now)
+            hourlyJobs = activityHistory.hourlyBuckets(now: now)
+            try? ActivityHistoryStore.save(activityHistory, to: activityHistoryURL)
             fleet = Fleet.machines(connected: connected, earnings: acct.earnings, localSerial: localSerial)
         } catch {
             remoteError = error.localizedDescription
             earnings = nil
-            windows = EarningsWindows()
-            hourlyJobs = []
             fleet = []
         }
     }

@@ -26,12 +26,14 @@ earning, orange while connecting, red when stopped. That's the whole pitch.
 
 Click it for the rest:
 
-- 💰 **Earnings** — balance, today / 7 days / lifetime, and job counts,
-  straight from the Darkbloom coordinator
+- 💰 **Earnings** — balance, locally tracked hourly earnings, lifetime
+  earnings, and job counts
 - 🖥️ **This Mac** — the model being served, requests and tokens this
   session, GPU memory, uptime, and trust level
 - 🌡️ **Hardware metrics** — memory use, fan speed, and CPU / GPU temperatures
-- 📊 **Jobs chart** — paid inference jobs per hour over the last 24 hours
+- 📊 **Hourly charts** — request throughput and earnings with stable hover
+  values; earnings bars are segmented by base reward and served model, and
+  faint current-hour segments show a smoothed end-of-hour projection
 - 💻 **My Macs** — appears when more than one of your machines is online,
   with the models each is serving
 - ⏯️ **Start / Stop / Restart** — control the provider without opening a
@@ -63,11 +65,17 @@ the same data the CLI does:
 |------|--------|---------|
 | Provider status | `~/.darkbloom/daemon-state.json` + pid liveness probe — the same staleness rule `darkbloom status` uses | every 3s |
 | Earnings & balance | `GET api.darkbloom.dev/v1/provider/account-earnings`, authenticated with the CLI's device token | every 30s |
+| Hourly activity | Deduplicated from each earnings poll and persisted in `~/Library/Application Support/Darkbloom Monitor/activity-history.json` | every 30s |
 | Fleet | public `GET /v1/providers/attestation`, filtered to machines verifiably yours | every 30s |
 | Start / Stop / Restart | shells out to the `darkbloom` CLI, which drives the `io.darkbloom.provider` LaunchAgent | on click |
 
 Measured footprint: 0.0% CPU, power impact 0.0 — the provider it watches
 does real GPU work; the monitor is a rounding error.
+
+The coordinator caps its per-job response, so the app keeps a compact local
+seven-day hourly ledger. It reports when the first 24-hour window is still
+being built or when the app was offline long enough to leave a gap, rather
+than presenting unknown hours as zero activity.
 
 A few hard-won details live in [AGENTS.md](AGENTS.md), including why
 machines are identified by hardware serial (both `provider_id` and

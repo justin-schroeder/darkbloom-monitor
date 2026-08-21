@@ -23,6 +23,12 @@ swift test                  # run the test suite (always run before committing)
   - `CoordinatorAPI.swift` — REST client for `api.darkbloom.dev`. Auth reuses
     the CLI's device token (`~/.darkbloom/auth_token`) as a Bearer header.
     Decode functions are separate from network functions so tests cover them.
+  - `ActivityHistory.swift` — account-scoped, persisted hourly request and
+    earnings ledger built by deduplicating overlapping coordinator polls;
+    earnings are categorized by the API's `model` field (`base_reward` is not
+    request throughput).
+  - `RunRateProjection.swift` — EWMA-prior, Kalman-style current-hour
+    projection shared by the throughput and earnings charts.
   - `EarningsMath.swift` — pure logic: earnings windows, hourly chart
     buckets, fleet identification.
   - `Fmt.swift` — display formatting.
@@ -38,6 +44,9 @@ swift test                  # run the test suite (always run before committing)
 - `/v1/me/*` coordinator endpoints require interactive Privy JWTs (web
   console sessions); the CLI device token does NOT work there. It does work
   on `/v1/provider/account-earnings`.
+- `/v1/provider/account-earnings` caps per-job history at 1,000 entries and
+  has no hourly aggregate. Hourly charts use the local `ActivityHistory`
+  ledger; preserve its deduplication and coverage-gap handling.
 - `darkbloom start` with no `--model` flags blocks forever on an interactive
   picker — always pass `--model` (AppState replays them from the LaunchAgent
   plist, which survives `darkbloom stop`).

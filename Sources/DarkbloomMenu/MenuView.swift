@@ -53,7 +53,9 @@ struct MenuView: View {
                         hourlyJobs: state.hourlyJobs,
                         activityTitle: activityChartTitle,
                         activitySubtitle: activitySubtitle,
-                        activityChartAccessibilityValue: activityChartAccessibilityValue
+                        activityChartAccessibilityValue: activityChartAccessibilityValue,
+                        earningsSubtitle: earningsChartSubtitle,
+                        earningsChartAccessibilityValue: earningsChartAccessibilityValue
                     )
 
                     ForEach(visibleMenuSections) { section in
@@ -473,19 +475,21 @@ struct MenuView: View {
 
     private var activitySubtitle: String {
         let jobs = state.hourlyJobs.reduce(0) { $0 + $1.jobs }
-        if recentEarningsHistoryIsCapped {
-            return "\(recentRequestCountText) sampled · API history capped"
+        if activityHistoryIsComplete24h {
+            return "\(recentRequestCountText) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
         }
-        return "\(recentRequestCountText) \(jobs == 1 ? "request" : "requests") in the last 24 hours"
+        if !state.activityHistory.coverageGaps.isEmpty {
+            return "\(recentRequestCountText) tracked · local history has gaps"
+        }
+        return "\(recentRequestCountText) tracked · building 24-hour history"
     }
 
     private var activityChartTitle: String {
-        recentEarningsHistoryIsCapped ? "Requests · recent sample" : "Requests · last 24 hours"
+        "Throughput · hourly"
     }
 
     private var recentRequestCountText: String {
-        let count = Fmt.count(UInt64(state.windows.last24hJobs))
-        return recentEarningsHistoryIsCapped ? "\(count)+" : count
+        Fmt.count(UInt64(state.windows.last24hJobs))
     }
 
     private var sessionRequestCountText: String {
@@ -498,13 +502,12 @@ struct MenuView: View {
         return Fmt.count(UInt64(max(0, count)))
     }
 
-    private var recentEarningsHistoryIsCapped: Bool {
-        guard let earnings = state.earnings,
-              let historyLimit = earnings.historyLimit,
-              earnings.earnings.count >= historyLimit,
-              let oldest = earnings.earnings.map(\.createdAt).min()
-        else { return false }
-        return oldest > Date().addingTimeInterval(-86_400)
+    private var activityHistoryIsComplete24h: Bool {
+        state.activityHistory.hasCompleteCoverage(forHours: 24)
+    }
+
+    private var activityHistoryIsComplete7d: Bool {
+        state.activityHistory.hasCompleteCoverage(forHours: ActivityHistory.retentionHours)
     }
 
     private var fleetSubtitle: String {
@@ -529,15 +532,23 @@ struct MenuView: View {
             .init(label: "Lifetime", value: Fmt.usd(earnings.totalMicroUSD)),
             .init(label: "Total jobs", value: totalJobCountText)
         ]
-        if recentEarningsHistoryIsCapped {
-            metrics.append(.init(label: "Recent sample", value: recentRequestCountText))
-            metrics.append(.init(label: "Sample value", value: Fmt.usd(state.windows.last24hMicroUSD)))
-        } else {
-            metrics.append(.init(label: "Today", value: Fmt.usd(state.windows.last24hMicroUSD)))
+        metrics.append(.init(
+            label: activityHistoryIsComplete24h ? "Last 24 hours" : "Tracked earnings",
+            value: Fmt.usd(state.windows.last24hMicroUSD)
+        ))
+        if activityHistoryIsComplete7d {
             metrics.append(.init(label: "7 days", value: Fmt.usd(state.windows.last7dMicroUSD)))
-            metrics.append(.init(label: "Requests today", value: recentRequestCountText))
         }
+        metrics.append(.init(
+            label: activityHistoryIsComplete24h ? "Requests · 24h" : "Tracked requests",
+            value: recentRequestCountText
+        ))
         return metrics
+    }
+
+    private var earningsChartSubtitle: String {
+        let value = Fmt.usd(state.windows.last24hMicroUSD)
+        return activityHistoryIsComplete24h ? "\(value) in 24 hours" : "\(value) tracked"
     }
 
     @ViewBuilder
@@ -721,8 +732,9 @@ struct MenuView: View {
     @ViewBuilder
     private var jobsChart: some View {
         if !state.hourlyJobs.isEmpty {
-            HourlyRequestsChart(
+            HourlyActivityChart(
                 buckets: state.hourlyJobs,
+                metric: .requests,
                 height: 86,
                 accessibilityValue: activityChartAccessibilityValue
             )
@@ -1001,8 +1013,16 @@ struct MenuView: View {
         guard let peak = state.hourlyJobs.max(by: { $0.jobs < $1.jobs }) else {
             return "No requests in the last 24 hours."
         }
-        let scope = recentEarningsHistoryIsCapped ? "in the latest capped sample" : "in the last 24 hours"
+        let scope = activityHistoryIsComplete24h ? "in the last 24 hours" : "in locally tracked history"
         return "\(recentRequestCountText) requests \(scope). Peak hour had \(peak.jobs) \(peak.jobs == 1 ? "request" : "requests")."
+    }
+
+    private var earningsChartAccessibilityValue: String {
+        guard let peak = state.hourlyJobs.max(by: { $0.microUSD < $1.microUSD }) else {
+            return "No tracked earnings."
+        }
+        let scope = activityHistoryIsComplete24h ? "in the last 24 hours" : "in locally tracked history"
+        return "\(Fmt.usd(state.windows.last24hMicroUSD)) earned \(scope). Peak hour earned \(Fmt.usd(peak.microUSD))."
     }
 }
 
@@ -1113,6 +1133,8 @@ private struct StatusHeroView: View {
     var activityTitle: String
     var activitySubtitle: String
     var activityChartAccessibilityValue: String
+    var earningsSubtitle: String
+    var earningsChartAccessibilityValue: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1145,22 +1167,22 @@ private struct StatusHeroView: View {
             }
 
             if !hourlyJobs.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text(activityTitle)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                        Text(activitySubtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                    HourlyRequestsChart(
-                        buckets: hourlyJobs,
-                        height: 58,
+                VStack(alignment: .leading, spacing: 9) {
+                    hourlyChart(
+                        title: activityTitle,
+                        subtitle: activitySubtitle,
+                        metric: .requests,
                         accessibilityValue: activityChartAccessibilityValue
                     )
+                    hourlyChart(
+                        title: "Earnings · hourly",
+                        subtitle: earningsSubtitle,
+                        metric: .earnings,
+                        accessibilityValue: earningsChartAccessibilityValue
+                    )
+                    Text("Faint current-hour bars are projected")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
                 .padding(.top, 1)
             }
@@ -1190,23 +1212,191 @@ private struct StatusHeroView: View {
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
     }
+
+    private func hourlyChart(
+        title: String,
+        subtitle: String,
+        metric: HourlyChartMetric,
+        accessibilityValue: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            HourlyActivityChart(
+                buckets: hourlyJobs,
+                metric: metric,
+                height: 58,
+                accessibilityValue: accessibilityValue
+            )
+            if metric == .earnings {
+                EarningsCategoryLegend(buckets: hourlyJobs)
+            }
+        }
+    }
 }
 
-private struct HourlyRequestsChart: View {
+private struct EarningsCategoryLegend: View {
     var buckets: [HourBucket]
+
+    private var categories: [String] {
+        var values = Set(buckets.flatMap { $0.earningsByCategory.keys.map(displayEarningCategory) })
+        if buckets.contains(where: { bucket in
+            bucket.microUSD > bucket.earningsByCategory.values.reduce(0) { $0 + $1.microUSD }
+        }) {
+            values.insert("Earlier tracked")
+        }
+        return values.sorted { earningCategoryOrder($0) < earningCategoryOrder($1) }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(categories, id: \.self) { category in
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(earningCategoryColor(category))
+                        .frame(width: 5, height: 5)
+                    Text(category)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+}
+
+private enum HourlyChartMetric {
+    case requests
+    case earnings
+
+    var axisTitle: String {
+        switch self {
+        case .requests: return "Requests"
+        case .earnings: return "Earnings"
+        }
+    }
+
+    func value(for bucket: HourBucket) -> Double {
+        switch self {
+        case .requests: return Double(bucket.jobs)
+        case .earnings: return Double(bucket.microUSD)
+        }
+    }
+
+    func formattedAxisValue(_ value: Double) -> String {
+        switch self {
+        case .requests: return Fmt.count(UInt64(max(0, value.rounded())))
+        case .earnings: return Fmt.usd(Int64(value.rounded()))
+        }
+    }
+}
+
+private struct HourlyEarningsSegment: Identifiable {
+    var hour: Date
+    var category: String
+    var microUSD: Double
+
+    var id: String { "\(hour.timeIntervalSince1970)-\(category)" }
+}
+
+private struct HourlyActivityChart: View {
+    var buckets: [HourBucket]
+    var metric: HourlyChartMetric
     var height: CGFloat
     var accessibilityValue: String
 
+    @State private var selectedHour: Date?
+    @State private var hoverLocation: CGPoint?
+
+    private var selectedBucket: HourBucket? {
+        guard let selectedHour else { return nil }
+        return buckets.first { $0.hour == selectedHour }
+    }
+
+    private var yUpperBound: Double {
+        let peak = buckets.map(displayedValue).max() ?? 0
+        return max(1, peak * 1.08)
+    }
+
+    private var xDomain: ClosedRange<Date> {
+        let start = buckets.first?.hour ?? Date()
+        let finalHour = buckets.last?.hour ?? start
+        let end = Calendar.current.date(byAdding: .hour, value: 1, to: finalHour)
+            ?? finalHour.addingTimeInterval(3_600)
+        return start...end
+    }
+
+    private var categoryDomain: [String] {
+        Array(Set(buckets.flatMap { earningsSegments(for: $0).map(\.category) }))
+            .sorted { earningCategoryOrder($0) < earningCategoryOrder($1) }
+    }
+
+    private var categoryRange: [Color] {
+        categoryDomain.map(earningCategoryColor)
+    }
+
     var body: some View {
-        Chart(buckets) { bucket in
-            BarMark(
-                x: .value("Hour", bucket.hour, unit: .hour),
-                y: .value("Requests", bucket.jobs),
-                width: .ratio(0.68)
-            )
-            .foregroundStyle(Color.green.gradient)
-            .cornerRadius(1.5)
+        Chart {
+            ForEach(buckets) { bucket in
+                if metric == .requests {
+                    BarMark(
+                        x: .value("Hour", bucket.hour, unit: .hour),
+                        y: .value(metric.axisTitle, bucket.jobs),
+                        width: .ratio(0.68),
+                        stacking: .standard
+                    )
+                    .foregroundStyle(Color.green)
+                    .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
+                    .cornerRadius(1.5)
+                    if let additional = projectedAdditional(for: bucket), additional > 0.5 {
+                        BarMark(
+                            x: .value("Hour", bucket.hour, unit: .hour),
+                            y: .value("Projected requests", additional),
+                            width: .ratio(0.68),
+                            stacking: .standard
+                        )
+                        .foregroundStyle(Color.green)
+                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
+                        .cornerRadius(1.5)
+                    }
+                } else {
+                    ForEach(earningsSegments(for: bucket)) { segment in
+                        BarMark(
+                            x: .value("Hour", segment.hour, unit: .hour),
+                            y: .value(metric.axisTitle, segment.microUSD),
+                            width: .ratio(0.68),
+                            stacking: .standard
+                        )
+                        .foregroundStyle(by: .value("Earning type", segment.category))
+                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
+                        .cornerRadius(1.5)
+                    }
+                    ForEach(projectedEarningsSegments(for: bucket)) { segment in
+                        BarMark(
+                            x: .value("Hour", segment.hour, unit: .hour),
+                            y: .value("Projected earnings", segment.microUSD),
+                            width: .ratio(0.68),
+                            stacking: .standard
+                        )
+                        .foregroundStyle(by: .value("Earning type", segment.category))
+                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
+                        .cornerRadius(1.5)
+                    }
+                }
+            }
         }
+        .chartXScale(domain: xDomain)
+        .chartYScale(domain: 0...yUpperBound)
+        .chartForegroundStyleScale(domain: categoryDomain, range: categoryRange)
+        .chartLegend(.hidden)
         .chartXAxis {
             AxisMarks(values: .stride(by: .hour, count: 6)) {
                 AxisGridLine().foregroundStyle(.quaternary)
@@ -1216,17 +1406,279 @@ private struct HourlyRequestsChart: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine().foregroundStyle(.quaternary)
-                AxisValueLabel()
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                AxisValueLabel {
+                    if let number = value.as(Double.self) {
+                        Text(metric.formattedAxisValue(number))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 48, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                guard let plotFrame = proxy.plotFrame else {
+                                    clearHover()
+                                    return
+                                }
+                                let frame = geometry[plotFrame]
+                                let plotLocation = CGPoint(
+                                    x: location.x - frame.minX,
+                                    y: location.y - frame.minY
+                                )
+                                guard frame.contains(location),
+                                      let bucket = hoveredBucket(at: plotLocation, proxy: proxy)
+                                else {
+                                    clearHover()
+                                    return
+                                }
+                                selectedHour = bucket.hour
+                                hoverLocation = location
+                            case .ended:
+                                clearHover()
+                            }
+                        }
+
+                    if let selectedBucket, let hoverLocation {
+                        hoverTooltip(for: selectedBucket)
+                            .frame(width: 126)
+                            .position(
+                                x: tooltipX(for: hoverLocation, width: geometry.size.width),
+                                y: hoverLocation.y - (metric == .earnings ? 38 : 24)
+                            )
+                            .allowsHitTesting(false)
+                    }
+                }
             }
         }
         .frame(height: height)
         .padding(.top, 2)
-        .accessibilityLabel("Requests by hour")
+        .accessibilityLabel("\(metric.axisTitle) by hour")
         .accessibilityValue(accessibilityValue)
+    }
+
+    private func clearHover() {
+        selectedHour = nil
+        hoverLocation = nil
+    }
+
+    private func hoveredBucket(at location: CGPoint, proxy: ChartProxy) -> HourBucket? {
+        let positioned = buckets.compactMap { bucket -> (HourBucket, CGFloat)? in
+            guard let interval = Calendar.current.dateInterval(of: .hour, for: bucket.hour) else {
+                return nil
+            }
+            let midpoint = interval.start.addingTimeInterval(interval.duration / 2)
+            guard let x = proxy.position(forX: midpoint) else { return nil }
+            return (bucket, x)
+        }
+        guard let nearest = positioned.min(by: {
+            abs($0.1 - location.x) < abs($1.1 - location.x)
+        }) else { return nil }
+
+        let spacing = zip(positioned, positioned.dropFirst())
+            .map { abs($1.1 - $0.1) }
+            .filter { $0 > 0 }
+            .min() ?? 0
+        let halfBarWidth = spacing * 0.34
+        guard halfBarWidth > 0, abs(nearest.1 - location.x) <= halfBarWidth else { return nil }
+
+        let value = displayedValue(for: nearest.0)
+        guard value > 0,
+              let top = proxy.position(forY: value),
+              let baseline = proxy.position(forY: 0)
+        else { return nil }
+        return (min(top, baseline)...max(top, baseline)).contains(location.y) ? nearest.0 : nil
+    }
+
+    private func tooltipX(for location: CGPoint, width: CGFloat) -> CGFloat {
+        let halfWidth: CGFloat = 63
+        let offset: CGFloat = 10
+        if location.x + offset + halfWidth <= width {
+            return location.x + offset + halfWidth
+        }
+        return location.x - offset - halfWidth
+    }
+
+    @ViewBuilder
+    private func hoverTooltip(for bucket: HourBucket) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(bucket.hour, format: .dateTime.weekday(.abbreviated).hour())
+                .foregroundStyle(.secondary)
+            if metric == .requests {
+                Text("\(Fmt.count(UInt64(bucket.jobs))) \(bucket.jobs == 1 ? "request" : "requests")")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                if let projected = projectedTotal(for: bucket), projected > Double(bucket.jobs) + 0.5 {
+                    Text("Projected \(Fmt.count(UInt64(projected.rounded())))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            } else {
+                Text(Fmt.usd(bucket.microUSD))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                if let projected = projectedTotal(for: bucket),
+                   projected > Double(bucket.microUSD) + 0.5 {
+                    Text("Projected \(Fmt.usd(Int64(projected.rounded())))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                ForEach(earningsSegments(for: bucket)) { segment in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(earningCategoryColor(segment.category))
+                            .frame(width: 5, height: 5)
+                        Text(segment.category)
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text(Fmt.usd(Int64(segment.microUSD.rounded())))
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+        .font(.caption2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+    }
+
+    private func earningsSegments(for bucket: HourBucket) -> [HourlyEarningsSegment] {
+        var grouped: [String: Double] = [:]
+        for (category, total) in bucket.earningsByCategory {
+            grouped[displayEarningCategory(category), default: 0] += Double(total.microUSD)
+        }
+        var segments = grouped.map { category, microUSD in
+            HourlyEarningsSegment(
+                hour: bucket.hour,
+                category: category,
+                microUSD: microUSD
+            )
+        }.filter { $0.microUSD != 0 }
+
+        let categorized = segments.reduce(0.0) { $0 + $1.microUSD }
+        if Double(bucket.microUSD) > categorized {
+            segments.append(HourlyEarningsSegment(
+                hour: bucket.hour,
+                category: "Earlier tracked",
+                microUSD: Double(bucket.microUSD) - categorized
+            ))
+        }
+        return segments.sorted {
+            earningCategoryOrder($0.category) < earningCategoryOrder($1.category)
+        }
+    }
+
+    private var projection: (hour: Date, total: Double, categories: [String: Double])? {
+        guard let current = buckets.last,
+              let interval = Calendar.current.dateInterval(of: .hour, for: current.hour),
+              interval.contains(Date())
+        else { return nil }
+        let elapsedFraction = Date().timeIntervalSince(interval.start) / interval.duration
+        let completed = Array(buckets.dropLast())
+
+        switch metric {
+        case .requests:
+            let history = projectionHistory(completed.map { Double($0.jobs) })
+            let total = RunRateProjection.projectedTotal(
+                completedTotals: history,
+                currentTotal: Double(current.jobs),
+                elapsedFraction: elapsedFraction
+            )
+            return (current.hour, total, [:])
+        case .earnings:
+            let allCategories = Set(buckets.flatMap { earningsSegments(for: $0).map(\.category) })
+                .filter { $0 != "Earlier tracked" }
+            var categoryTotals: [String: Double] = [:]
+            for category in allCategories {
+                let history = projectionHistory(completed.map { bucket in
+                    earningsSegments(for: bucket)
+                        .first(where: { $0.category == category })?.microUSD ?? 0
+                })
+                let currentValue = earningsSegments(for: current)
+                    .first(where: { $0.category == category })?.microUSD ?? 0
+                categoryTotals[category] = RunRateProjection.projectedTotal(
+                    completedTotals: history,
+                    currentTotal: currentValue,
+                    elapsedFraction: elapsedFraction
+                )
+            }
+            let earlierTracked = earningsSegments(for: current)
+                .first(where: { $0.category == "Earlier tracked" })?.microUSD ?? 0
+            return (current.hour, categoryTotals.values.reduce(earlierTracked, +), categoryTotals)
+        }
+    }
+
+    private func projectionHistory(_ values: [Double]) -> [Double] {
+        guard let firstObserved = values.firstIndex(where: { $0 > 0 }) else { return [] }
+        return Array(values[firstObserved...].suffix(8))
+    }
+
+    private func displayedValue(for bucket: HourBucket) -> Double {
+        projectedTotal(for: bucket) ?? metric.value(for: bucket)
+    }
+
+    private func projectedTotal(for bucket: HourBucket) -> Double? {
+        guard let projection, projection.hour == bucket.hour else { return nil }
+        return projection.total
+    }
+
+    private func projectedAdditional(for bucket: HourBucket) -> Double? {
+        guard let total = projectedTotal(for: bucket) else { return nil }
+        return max(0, total - Double(bucket.jobs))
+    }
+
+    private func projectedEarningsSegments(for bucket: HourBucket) -> [HourlyEarningsSegment] {
+        guard let projection, projection.hour == bucket.hour else { return [] }
+        let actual = Dictionary(
+            uniqueKeysWithValues: earningsSegments(for: bucket).map { ($0.category, $0.microUSD) }
+        )
+        return projection.categories.compactMap { category, projected in
+            let additional = max(0, projected - (actual[category] ?? 0))
+            guard additional > 0.5 else { return nil }
+            return HourlyEarningsSegment(
+                hour: bucket.hour,
+                category: category,
+                microUSD: additional
+            )
+        }.sorted { earningCategoryOrder($0.category) < earningCategoryOrder($1.category) }
+    }
+}
+
+private func displayEarningCategory(_ raw: String) -> String {
+    if raw == "base_reward" { return "Base" }
+    if raw.hasPrefix("gemma-4") { return "Gemma 4" }
+    if raw.hasPrefix("qwen3.6") { return "Qwen 3.6" }
+    return raw
+}
+
+private func earningCategoryOrder(_ category: String) -> Int {
+    switch category {
+    case "Base": return 0
+    case "Gemma 4": return 1
+    case "Qwen 3.6": return 2
+    case "Earlier tracked": return 99
+    default: return 50
+    }
+}
+
+private func earningCategoryColor(_ category: String) -> Color {
+    switch category {
+    case "Base": return .blue
+    case "Gemma 4": return .mint
+    case "Qwen 3.6": return .purple
+    case "Earlier tracked": return .gray
+    default: return .teal
     }
 }
 

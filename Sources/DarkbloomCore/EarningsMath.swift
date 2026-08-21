@@ -12,16 +12,48 @@ public struct EarningsWindows: Equatable {
     }
 }
 
-public struct HourBucket: Identifiable, Equatable {
+public struct EarningCategoryTotal: Codable, Equatable {
+    public var entries: Int
+    public var microUSD: Int64
+
+    public init(entries: Int = 0, microUSD: Int64 = 0) {
+        self.entries = entries
+        self.microUSD = microUSD
+    }
+}
+
+public struct HourBucket: Codable, Identifiable, Equatable {
     public var hour: Date
     public var jobs: Int
     public var microUSD: Int64
+    public var earningsByCategory: [String: EarningCategoryTotal]
     public var id: Date { hour }
 
-    public init(hour: Date, jobs: Int, microUSD: Int64) {
+    public init(
+        hour: Date,
+        jobs: Int,
+        microUSD: Int64,
+        earningsByCategory: [String: EarningCategoryTotal] = [:]
+    ) {
         self.hour = hour
         self.jobs = jobs
         self.microUSD = microUSD
+        self.earningsByCategory = earningsByCategory
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hour, jobs, microUSD, earningsByCategory
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hour = try values.decode(Date.self, forKey: .hour)
+        jobs = try values.decode(Int.self, forKey: .jobs)
+        microUSD = try values.decode(Int64.self, forKey: .microUSD)
+        earningsByCategory = try values.decodeIfPresent(
+            [String: EarningCategoryTotal].self,
+            forKey: .earningsByCategory
+        ) ?? [:]
     }
 }
 
@@ -34,7 +66,7 @@ public enum EarningsMath {
             w.last7dMicroUSD += e.amountMicroUSD
             if e.createdAt > day {
                 w.last24hMicroUSD += e.amountMicroUSD
-                w.last24hJobs += 1
+                if e.model != "base_reward" { w.last24hJobs += 1 }
             }
         }
         return w
@@ -57,8 +89,12 @@ public enum EarningsMath {
         for e in entries where e.createdAt > day {
             guard let h = calendar.dateInterval(of: .hour, for: e.createdAt)?.start,
                   var b = buckets[h] else { continue }
-            b.jobs += 1
+            if e.model != "base_reward" { b.jobs += 1 }
             b.microUSD += e.amountMicroUSD
+            var category = b.earningsByCategory[e.model] ?? EarningCategoryTotal()
+            category.entries += 1
+            category.microUSD += e.amountMicroUSD
+            b.earningsByCategory[e.model] = category
             buckets[h] = b
         }
         return buckets.values.sorted { $0.hour < $1.hour }

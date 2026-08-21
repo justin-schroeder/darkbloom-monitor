@@ -6,9 +6,10 @@ final class EarningsMathTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_781_280_000 + 1_800)
 
     func earning(_ id: Int64, microUSD: Int64, agoSeconds: TimeInterval,
-                 providerID: String = "p1", providerKey: String = "k1") -> CoordinatorAPI.Earning {
+                 providerID: String = "p1", providerKey: String = "k1",
+                 model: String = "gpt-oss-20b") -> CoordinatorAPI.Earning {
         CoordinatorAPI.Earning(
-            id: id, providerID: providerID, providerKey: providerKey, model: "gpt-oss-20b",
+            id: id, providerID: providerID, providerKey: providerKey, model: model,
             amountMicroUSD: microUSD, promptTokens: 10, completionTokens: 20,
             createdAt: now.addingTimeInterval(-agoSeconds))
     }
@@ -51,6 +52,21 @@ final class EarningsMathTests: XCTestCase {
         XCTAssertEqual(buckets.map(\.microUSD).reduce(0, +), 175)
         XCTAssertEqual(buckets.last?.jobs, 2)
         XCTAssertEqual(buckets.last?.microUSD, 150)
+    }
+
+    func testBaseRewardIsExcludedFromRequestThroughputButIncludedInEarnings() {
+        let entries = [
+            earning(1, microUSD: 500, agoSeconds: 60, model: "base_reward"),
+            earning(2, microUSD: 100, agoSeconds: 60, model: "gemma-4-26b-qat-4bit"),
+        ]
+
+        let windows = EarningsMath.windows(entries, now: now)
+        let latest = EarningsMath.hourlyBuckets(entries, now: now).last
+        XCTAssertEqual(windows.last24hJobs, 1)
+        XCTAssertEqual(windows.last24hMicroUSD, 600)
+        XCTAssertEqual(latest?.jobs, 1)
+        XCTAssertEqual(latest?.microUSD, 600)
+        XCTAssertEqual(latest?.earningsByCategory["base_reward"]?.microUSD, 500)
     }
 }
 
