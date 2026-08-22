@@ -1313,7 +1313,6 @@ private struct HourlyActivityChart: View {
     var height: CGFloat
     var accessibilityValue: String
 
-    @State private var selectedHour: Date?
     @StateObject private var tooltipPresenter = ChartTooltipPanelPresenter()
 
     private var yUpperBound: Double {
@@ -1349,7 +1348,7 @@ private struct HourlyActivityChart: View {
                     stacking: .standard
                 )
                 .foregroundStyle(by: .value("Model", segment.category))
-                .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
+                .opacity(0.95)
                 .cornerRadius(1.5)
             }
             ForEach(projectedSegments(for: bucket)) { segment in
@@ -1360,7 +1359,7 @@ private struct HourlyActivityChart: View {
                     stacking: .standard
                 )
                 .foregroundStyle(by: .value("Model", segment.category))
-                .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
+                .opacity(0.22)
                 .cornerRadius(1.5)
             }
         }
@@ -1433,9 +1432,11 @@ private struct HourlyActivityChart: View {
                             clearHover()
                             return
                         }
-                        selectedHour = bucket.hour
-                        tooltipPresenter.show(at: NSEvent.mouseLocation) {
-                            hoverTooltip(for: bucket)
+                        tooltipPresenter.show(
+                            hour: bucket.hour,
+                            at: NSEvent.mouseLocation
+                        ) {
+                            tooltipContent(for: bucket)
                         }
                     case .ended:
                         clearHover()
@@ -1445,92 +1446,73 @@ private struct HourlyActivityChart: View {
     }
 
     private func clearHover() {
-        selectedHour = nil
         tooltipPresenter.hide()
     }
 
     private func hoveredBucket(at location: CGPoint, proxy: ChartProxy) -> HourBucket? {
-        let positioned = buckets.compactMap { bucket -> (HourBucket, CGFloat)? in
-            guard let interval = Calendar.current.dateInterval(of: .hour, for: bucket.hour) else {
-                return nil
-            }
-            let midpoint = interval.start.addingTimeInterval(interval.duration / 2)
-            guard let x = proxy.position(forX: midpoint) else { return nil }
-            return (bucket, x)
-        }
-        guard let nearest = positioned.min(by: {
-            abs($0.1 - location.x) < abs($1.1 - location.x)
-        }) else { return nil }
+        guard let hoveredDate = proxy.value(atX: location.x, as: Date.self),
+              let interval = Calendar.current.dateInterval(of: .hour, for: hoveredDate),
+              let bucket = buckets.first(where: { $0.hour == interval.start })
+        else { return nil }
 
-        let spacing = zip(positioned, positioned.dropFirst())
-            .map { abs($1.1 - $0.1) }
-            .filter { $0 > 0 }
-            .min() ?? 0
+        let midpoint = interval.start.addingTimeInterval(interval.duration / 2)
+        let nextMidpoint = midpoint.addingTimeInterval(interval.duration)
+        guard let x = proxy.position(forX: midpoint),
+              let nextX = proxy.position(forX: nextMidpoint)
+        else { return nil }
+        let spacing = abs(nextX - x)
         let halfBarWidth = spacing * 0.34
-        guard halfBarWidth > 0, abs(nearest.1 - location.x) <= halfBarWidth else { return nil }
+        guard halfBarWidth > 0, abs(x - location.x) <= halfBarWidth else { return nil }
 
-        let value = displayedValue(for: nearest.0)
+        let value = metric.value(for: bucket)
         guard value > 0,
               let top = proxy.position(forY: value),
               let baseline = proxy.position(forY: 0)
         else { return nil }
-        return (min(top, baseline)...max(top, baseline)).contains(location.y) ? nearest.0 : nil
+        return (min(top, baseline)...max(top, baseline)).contains(location.y) ? bucket : nil
     }
 
-    @ViewBuilder
-    private func hoverTooltip(for bucket: HourBucket) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(bucket.hour, format: .dateTime.weekday(.abbreviated).hour())
-                .foregroundStyle(.secondary)
-            if metric == .requests {
-                Text("\(Fmt.count(UInt64(bucket.jobs))) \(bucket.jobs == 1 ? "request" : "requests")")
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                if let projected = projectedTotal(for: bucket), projected > Double(bucket.jobs) + 0.5 {
-                    Text("Projected \(Fmt.count(UInt64(projected.rounded())))")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                categoryRows(for: bucket)
-            } else {
-                Text(Fmt.usd(bucket.microUSD))
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                if let projected = projectedTotal(for: bucket),
-                   projected > Double(bucket.microUSD) + 0.5 {
-                    Text("Projected \(Fmt.usd(Int64(projected.rounded())))")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                categoryRows(for: bucket)
-            }
-        }
-        .font(.caption2)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
-    }
+    private func tooltipContent(for bucket: HourBucket) -> ChartTooltipContent {
+        let projected = projectedTotal(for: bucket)
+        let headline: String
+        let projectionText: String?
+        let rows: [ChartTooltipRow]
 
-    @ViewBuilder
-    private func categoryRows(for bucket: HourBucket) -> some View {
-        ForEach(segments(for: bucket)) { segment in
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(earningCategoryColor(segment.category))
-                    .frame(width: 5, height: 5)
-                Text(segment.category)
-                    .lineLimit(1)
-                Spacer(minLength: 2)
-                if metric == .requests {
-                    Text(Fmt.count(UInt64(max(0, segment.value.rounded()))))
-                        .monospacedDigit()
-                } else {
-                    Text(Fmt.usd(Int64(segment.value.rounded())))
-                        .monospacedDigit()
-                }
+        switch metric {
+        case .requests:
+            headline = "\(Fmt.count(UInt64(bucket.jobs))) \(bucket.jobs == 1 ? "request" : "requests")"
+            projectionText = projected.flatMap {
+                $0 > Double(bucket.jobs) + 0.5
+                    ? "Projected \(Fmt.count(UInt64($0.rounded())))"
+                    : nil
+            }
+            rows = segments(for: bucket).map {
+                ChartTooltipRow(
+                    category: $0.category,
+                    value: Fmt.count(UInt64(max(0, $0.value.rounded())))
+                )
+            }
+        case .earnings:
+            headline = Fmt.usd(bucket.microUSD)
+            projectionText = projected.flatMap {
+                $0 > Double(bucket.microUSD) + 0.5
+                    ? "Projected \(Fmt.usd(Int64($0.rounded())))"
+                    : nil
+            }
+            rows = segments(for: bucket).map {
+                ChartTooltipRow(
+                    category: $0.category,
+                    value: Fmt.usd(Int64($0.value.rounded()))
+                )
             }
         }
+
+        return ChartTooltipContent(
+            hour: bucket.hour,
+            headline: headline,
+            projection: projectionText,
+            rows: rows
+        )
     }
 
     private func segments(for bucket: HourBucket) -> [HourlyCategorySegment] {
@@ -1635,11 +1617,13 @@ private struct HourlyActivityChart: View {
     }
 
     private func projectedTotal(for bucket: HourBucket) -> Double? {
+        guard bucket.hour == buckets.last?.hour else { return nil }
         guard let projection, projection.hour == bucket.hour else { return nil }
         return projection.total
     }
 
     private func projectedSegments(for bucket: HourBucket) -> [HourlyCategorySegment] {
+        guard bucket.hour == buckets.last?.hour else { return [] }
         guard let projection, projection.hour == bucket.hour else { return [] }
         let actual = Dictionary(
             uniqueKeysWithValues: segments(for: bucket).map { ($0.category, $0.value) }
@@ -1673,7 +1657,7 @@ private func earningCategoryOrder(_ category: String) -> Int {
     }
 }
 
-private func earningCategoryColor(_ category: String) -> Color {
+func earningCategoryColor(_ category: String) -> Color {
     switch category {
     case "Base": return .blue
     case "Gemma 4": return .mint
