@@ -1338,32 +1338,37 @@ private struct HourlyActivityChart: View {
         categoryDomain.map(earningCategoryColor)
     }
 
-    var body: some View {
-        Chart {
-            ForEach(buckets) { bucket in
-                ForEach(segments(for: bucket)) { segment in
-                    BarMark(
-                        x: .value("Hour", segment.hour, unit: .hour),
-                        y: .value(metric.axisTitle, segment.value),
-                        width: .ratio(0.68),
-                        stacking: .standard
-                    )
-                    .foregroundStyle(by: .value("Model", segment.category))
-                    .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
-                    .cornerRadius(1.5)
-                }
-                ForEach(projectedSegments(for: bucket)) { segment in
-                    BarMark(
-                        x: .value("Hour", segment.hour, unit: .hour),
-                        y: .value("Projected \(metric.axisTitle.lowercased())", segment.value),
-                        width: .ratio(0.68),
-                        stacking: .standard
-                    )
-                    .foregroundStyle(by: .value("Model", segment.category))
-                    .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
-                    .cornerRadius(1.5)
-                }
+    @ChartContentBuilder
+    private var chartMarks: some ChartContent {
+        ForEach(buckets) { bucket in
+            ForEach(segments(for: bucket)) { segment in
+                BarMark(
+                    x: .value("Hour", segment.hour, unit: .hour),
+                    y: .value(metric.axisTitle, segment.value),
+                    width: .ratio(0.68),
+                    stacking: .standard
+                )
+                .foregroundStyle(by: .value("Model", segment.category))
+                .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
+                .cornerRadius(1.5)
             }
+            ForEach(projectedSegments(for: bucket)) { segment in
+                BarMark(
+                    x: .value("Hour", segment.hour, unit: .hour),
+                    y: .value("Projected \(metric.axisTitle.lowercased())", segment.value),
+                    width: .ratio(0.68),
+                    stacking: .standard
+                )
+                .foregroundStyle(by: .value("Model", segment.category))
+                .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
+                .cornerRadius(1.5)
+            }
+        }
+    }
+
+    private var chart: some View {
+        Chart {
+            chartMarks
         }
         .chartXScale(domain: xDomain)
         .chartYScale(domain: 0...yUpperBound)
@@ -1390,39 +1395,12 @@ private struct HourlyActivityChart: View {
                 }
             }
         }
+    }
+
+    var body: some View {
+        chart
         .chartOverlay { proxy in
-            GeometryReader { geometry in
-                ZStack(alignment: .topLeading) {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                guard let plotFrame = proxy.plotFrame else {
-                                    clearHover()
-                                    return
-                                }
-                                let frame = geometry[plotFrame]
-                                let plotLocation = CGPoint(
-                                    x: location.x - frame.minX,
-                                    y: location.y - frame.minY
-                                )
-                                guard frame.contains(location),
-                                      let bucket = hoveredBucket(at: plotLocation, proxy: proxy)
-                                else {
-                                    clearHover()
-                                    return
-                                }
-                                selectedHour = bucket.hour
-                                tooltipPresenter.show(at: NSEvent.mouseLocation) {
-                                    hoverTooltip(for: bucket)
-                                }
-                            case .ended:
-                                clearHover()
-                            }
-                        }
-                }
-            }
+            hoverOverlay(proxy: proxy)
         }
         .frame(height: height)
         .padding(.top, 2)
@@ -1431,6 +1409,39 @@ private struct HourlyActivityChart: View {
         }
         .accessibilityLabel("\(metric.axisTitle) by hour")
         .accessibilityValue(accessibilityValue)
+    }
+
+    private func hoverOverlay(proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard let plotFrame = proxy.plotFrame else {
+                            clearHover()
+                            return
+                        }
+                        let frame = geometry[plotFrame]
+                        let plotLocation = CGPoint(
+                            x: location.x - frame.minX,
+                            y: location.y - frame.minY
+                        )
+                        guard frame.contains(location),
+                              let bucket = hoveredBucket(at: plotLocation, proxy: proxy)
+                        else {
+                            clearHover()
+                            return
+                        }
+                        selectedHour = bucket.hour
+                        tooltipPresenter.show(at: NSEvent.mouseLocation) {
+                            hoverTooltip(for: bucket)
+                        }
+                    case .ended:
+                        clearHover()
+                    }
+                }
+        }
     }
 
     private func clearHover() {
