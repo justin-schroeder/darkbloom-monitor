@@ -71,6 +71,11 @@ final class ActivityHistoryTests: XCTestCase {
         XCTAssertEqual(latest?.earningsByCategory["base_reward"]?.microUSD, 400)
         XCTAssertEqual(latest?.earningsByCategory["gemma-4-26b-qat-4bit"]?.microUSD, 100)
         XCTAssertEqual(latest?.earningsByCategory["qwen3.6-35b-a3b-vl-mtp-mxfp8"]?.microUSD, 200)
+        XCTAssertEqual(latest?.requestsByModel, [
+            "gemma-4-26b-qat-4bit": 1,
+            "qwen3.6-35b-a3b-vl-mtp-mxfp8": 1,
+        ])
+        XCTAssertEqual(latest?.uncategorizedRequests, 0)
     }
 
     func testHistoryPersistsDeduplicationState() throws {

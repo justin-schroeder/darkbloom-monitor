@@ -1299,10 +1299,10 @@ private enum HourlyChartMetric {
     }
 }
 
-private struct HourlyEarningsSegment: Identifiable {
+private struct HourlyCategorySegment: Identifiable {
     var hour: Date
     var category: String
-    var microUSD: Double
+    var value: Double
 
     var id: String { "\(hour.timeIntervalSince1970)-\(category)" }
 }
@@ -1330,7 +1330,7 @@ private struct HourlyActivityChart: View {
     }
 
     private var categoryDomain: [String] {
-        Array(Set(buckets.flatMap { earningsSegments(for: $0).map(\.category) }))
+        Array(Set(buckets.flatMap { segments(for: $0).map(\.category) }))
             .sorted { earningCategoryOrder($0) < earningCategoryOrder($1) }
     }
 
@@ -1341,50 +1341,27 @@ private struct HourlyActivityChart: View {
     var body: some View {
         Chart {
             ForEach(buckets) { bucket in
-                if metric == .requests {
+                ForEach(segments(for: bucket)) { segment in
                     BarMark(
-                        x: .value("Hour", bucket.hour, unit: .hour),
-                        y: .value(metric.axisTitle, bucket.jobs),
+                        x: .value("Hour", segment.hour, unit: .hour),
+                        y: .value(metric.axisTitle, segment.value),
                         width: .ratio(0.68),
                         stacking: .standard
                     )
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(by: .value("Model", segment.category))
                     .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
                     .cornerRadius(1.5)
-                    if let additional = projectedAdditional(for: bucket), additional > 0.5 {
-                        BarMark(
-                            x: .value("Hour", bucket.hour, unit: .hour),
-                            y: .value("Projected requests", additional),
-                            width: .ratio(0.68),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(Color.green)
-                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
-                        .cornerRadius(1.5)
-                    }
-                } else {
-                    ForEach(earningsSegments(for: bucket)) { segment in
-                        BarMark(
-                            x: .value("Hour", segment.hour, unit: .hour),
-                            y: .value(metric.axisTitle, segment.microUSD),
-                            width: .ratio(0.68),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(by: .value("Earning type", segment.category))
-                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.95 : 0.32)
-                        .cornerRadius(1.5)
-                    }
-                    ForEach(projectedEarningsSegments(for: bucket)) { segment in
-                        BarMark(
-                            x: .value("Hour", segment.hour, unit: .hour),
-                            y: .value("Projected earnings", segment.microUSD),
-                            width: .ratio(0.68),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(by: .value("Earning type", segment.category))
-                        .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
-                        .cornerRadius(1.5)
-                    }
+                }
+                ForEach(projectedSegments(for: bucket)) { segment in
+                    BarMark(
+                        x: .value("Hour", segment.hour, unit: .hour),
+                        y: .value("Projected \(metric.axisTitle.lowercased())", segment.value),
+                        width: .ratio(0.68),
+                        stacking: .standard
+                    )
+                    .foregroundStyle(by: .value("Model", segment.category))
+                    .opacity(selectedHour == nil || selectedHour == bucket.hour ? 0.22 : 0.08)
+                    .cornerRadius(1.5)
                 }
             }
         }
@@ -1503,6 +1480,7 @@ private struct HourlyActivityChart: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                categoryRows(for: bucket)
             } else {
                 Text(Fmt.usd(bucket.microUSD))
                     .fontWeight(.semibold)
@@ -1513,18 +1491,7 @@ private struct HourlyActivityChart: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                ForEach(earningsSegments(for: bucket)) { segment in
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(earningCategoryColor(segment.category))
-                            .frame(width: 5, height: 5)
-                        Text(segment.category)
-                            .lineLimit(1)
-                        Spacer(minLength: 2)
-                        Text(Fmt.usd(Int64(segment.microUSD.rounded())))
-                            .monospacedDigit()
-                    }
-                }
+                categoryRows(for: bucket)
             }
         }
         .font(.caption2)
@@ -1534,25 +1501,74 @@ private struct HourlyActivityChart: View {
         .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
     }
 
-    private func earningsSegments(for bucket: HourBucket) -> [HourlyEarningsSegment] {
+    @ViewBuilder
+    private func categoryRows(for bucket: HourBucket) -> some View {
+        ForEach(segments(for: bucket)) { segment in
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(earningCategoryColor(segment.category))
+                    .frame(width: 5, height: 5)
+                Text(segment.category)
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                if metric == .requests {
+                    Text(Fmt.count(UInt64(max(0, segment.value.rounded()))))
+                        .monospacedDigit()
+                } else {
+                    Text(Fmt.usd(Int64(segment.value.rounded())))
+                        .monospacedDigit()
+                }
+            }
+        }
+    }
+
+    private func segments(for bucket: HourBucket) -> [HourlyCategorySegment] {
+        switch metric {
+        case .requests: return requestSegments(for: bucket)
+        case .earnings: return earningsSegments(for: bucket)
+        }
+    }
+
+    private func requestSegments(for bucket: HourBucket) -> [HourlyCategorySegment] {
+        var grouped: [String: Double] = [:]
+        for (model, count) in bucket.requestsByModel {
+            grouped[displayEarningCategory(model), default: 0] += Double(count)
+        }
+        var segments = grouped.map { category, requests in
+            HourlyCategorySegment(hour: bucket.hour, category: category, value: requests)
+        }.filter { $0.value != 0 }
+
+        if bucket.uncategorizedRequests > 0 {
+            segments.append(HourlyCategorySegment(
+                hour: bucket.hour,
+                category: "Earlier tracked",
+                value: Double(bucket.uncategorizedRequests)
+            ))
+        }
+        return segments.sorted {
+            earningCategoryOrder($0.category) < earningCategoryOrder($1.category)
+        }
+    }
+
+    private func earningsSegments(for bucket: HourBucket) -> [HourlyCategorySegment] {
         var grouped: [String: Double] = [:]
         for (category, total) in bucket.earningsByCategory {
             grouped[displayEarningCategory(category), default: 0] += Double(total.microUSD)
         }
         var segments = grouped.map { category, microUSD in
-            HourlyEarningsSegment(
+            HourlyCategorySegment(
                 hour: bucket.hour,
                 category: category,
-                microUSD: microUSD
+                value: microUSD
             )
-        }.filter { $0.microUSD != 0 }
+        }.filter { $0.value != 0 }
 
-        let categorized = segments.reduce(0.0) { $0 + $1.microUSD }
+        let categorized = segments.reduce(0.0) { $0 + $1.value }
         if Double(bucket.microUSD) > categorized {
-            segments.append(HourlyEarningsSegment(
+            segments.append(HourlyCategorySegment(
                 hour: bucket.hour,
                 category: "Earlier tracked",
-                microUSD: Double(bucket.microUSD) - categorized
+                value: Double(bucket.microUSD) - categorized
             ))
         }
         return segments.sorted {
@@ -1568,36 +1584,34 @@ private struct HourlyActivityChart: View {
         let elapsedFraction = Date().timeIntervalSince(interval.start) / interval.duration
         let completed = Array(buckets.dropLast())
 
-        switch metric {
-        case .requests:
-            let history = projectionHistory(completed.map { Double($0.jobs) })
-            let total = RunRateProjection.projectedTotal(
+        let allCategories = Set(buckets.flatMap { segments(for: $0).map(\.category) })
+            .filter { $0 != "Earlier tracked" }
+        var categoryTotals: [String: Double] = [:]
+        for category in allCategories {
+            let history = projectionHistory(completed.map { bucket in
+                segments(for: bucket)
+                    .first(where: { $0.category == category })?.value ?? 0
+            })
+            let currentValue = segments(for: current)
+                .first(where: { $0.category == category })?.value ?? 0
+            categoryTotals[category] = RunRateProjection.projectedTotal(
                 completedTotals: history,
-                currentTotal: Double(current.jobs),
+                currentTotal: currentValue,
                 elapsedFraction: elapsedFraction
             )
-            return (current.hour, total, [:])
-        case .earnings:
-            let allCategories = Set(buckets.flatMap { earningsSegments(for: $0).map(\.category) })
-                .filter { $0 != "Earlier tracked" }
-            var categoryTotals: [String: Double] = [:]
-            for category in allCategories {
-                let history = projectionHistory(completed.map { bucket in
-                    earningsSegments(for: bucket)
-                        .first(where: { $0.category == category })?.microUSD ?? 0
-                })
-                let currentValue = earningsSegments(for: current)
-                    .first(where: { $0.category == category })?.microUSD ?? 0
-                categoryTotals[category] = RunRateProjection.projectedTotal(
-                    completedTotals: history,
-                    currentTotal: currentValue,
-                    elapsedFraction: elapsedFraction
-                )
-            }
-            let earlierTracked = earningsSegments(for: current)
-                .first(where: { $0.category == "Earlier tracked" })?.microUSD ?? 0
-            return (current.hour, categoryTotals.values.reduce(earlierTracked, +), categoryTotals)
         }
+        let earlierTracked = segments(for: current)
+            .first(where: { $0.category == "Earlier tracked" })?.value ?? 0
+
+        if categoryTotals.isEmpty, earlierTracked > 0 {
+            let total = RunRateProjection.projectedTotal(
+                completedTotals: projectionHistory(completed.map { metric.value(for: $0) }),
+                currentTotal: metric.value(for: current),
+                elapsedFraction: elapsedFraction
+            )
+            return (current.hour, total, ["Earlier tracked": total])
+        }
+        return (current.hour, categoryTotals.values.reduce(earlierTracked, +), categoryTotals)
     }
 
     private func projectionHistory(_ values: [Double]) -> [Double] {
@@ -1614,23 +1628,18 @@ private struct HourlyActivityChart: View {
         return projection.total
     }
 
-    private func projectedAdditional(for bucket: HourBucket) -> Double? {
-        guard let total = projectedTotal(for: bucket) else { return nil }
-        return max(0, total - Double(bucket.jobs))
-    }
-
-    private func projectedEarningsSegments(for bucket: HourBucket) -> [HourlyEarningsSegment] {
+    private func projectedSegments(for bucket: HourBucket) -> [HourlyCategorySegment] {
         guard let projection, projection.hour == bucket.hour else { return [] }
         let actual = Dictionary(
-            uniqueKeysWithValues: earningsSegments(for: bucket).map { ($0.category, $0.microUSD) }
+            uniqueKeysWithValues: segments(for: bucket).map { ($0.category, $0.value) }
         )
         return projection.categories.compactMap { category, projected in
             let additional = max(0, projected - (actual[category] ?? 0))
             guard additional > 0.5 else { return nil }
-            return HourlyEarningsSegment(
+            return HourlyCategorySegment(
                 hour: bucket.hour,
                 category: category,
-                microUSD: additional
+                value: additional
             )
         }.sorted { earningCategoryOrder($0.category) < earningCategoryOrder($1.category) }
     }

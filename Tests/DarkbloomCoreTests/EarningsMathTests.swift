@@ -67,6 +67,23 @@ final class EarningsMathTests: XCTestCase {
         XCTAssertEqual(latest?.jobs, 1)
         XCTAssertEqual(latest?.microUSD, 600)
         XCTAssertEqual(latest?.earningsByCategory["base_reward"]?.microUSD, 500)
+        XCTAssertEqual(latest?.requestsByModel, ["gemma-4-26b-qat-4bit": 1])
+        XCTAssertEqual(latest?.uncategorizedRequests, 0)
+    }
+
+    func testRequestBreakdownPreservesLegacyUncategorizedCount() {
+        let bucket = HourBucket(
+            hour: now,
+            jobs: 3,
+            microUSD: 600,
+            earningsByCategory: [
+                "base_reward": EarningCategoryTotal(entries: 1, microUSD: 500),
+                "gemma-4-26b-qat-4bit": EarningCategoryTotal(entries: 1, microUSD: 100),
+            ]
+        )
+
+        XCTAssertEqual(bucket.requestsByModel, ["gemma-4-26b-qat-4bit": 1])
+        XCTAssertEqual(bucket.uncategorizedRequests, 2)
     }
 }
 

@@ -41,6 +41,17 @@ public struct HourBucket: Codable, Identifiable, Equatable {
         self.earningsByCategory = earningsByCategory
     }
 
+    public var requestsByModel: [String: Int] {
+        earningsByCategory.reduce(into: [:]) { requests, entry in
+            guard entry.key != "base_reward", entry.value.entries > 0 else { return }
+            requests[entry.key, default: 0] += entry.value.entries
+        }
+    }
+
+    public var uncategorizedRequests: Int {
+        max(0, jobs - requestsByModel.values.reduce(0, +))
+    }
+
     enum CodingKeys: String, CodingKey {
         case hour, jobs, microUSD, earningsByCategory
     }
