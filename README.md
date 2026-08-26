@@ -13,7 +13,7 @@ tells you everything else.
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
 <p>
-  <img src="docs/darkbloom-monitor.png" width="330" alt="Darkbloom Monitor menu showing earnings, provider status, hardware metrics, and the jobs chart">
+  <img src="docs/darkbloom-monitor.png" width="330" alt="Darkbloom Monitor menu showing provider status, hourly throughput and earnings charts, and controls">
   <img src="docs/darkbloom-monitor-preferences.png" width="430" alt="Darkbloom Monitor preferences showing menu layout and cooling assist settings">
 </p>
 
