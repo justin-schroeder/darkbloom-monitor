@@ -235,12 +235,19 @@ public struct CoordinatorAPI {
 
     // MARK: - Network
 
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
     private static func get(_ path: String, query: [URLQueryItem] = [], token: String? = nil) async throws -> Data {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query }
         var req = URLRequest(url: comps.url!, timeoutInterval: 20)
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(code) else { throw APIError.http(code, errorMessage(from: data)) }
@@ -282,7 +289,7 @@ public struct CoordinatorAPI {
     }
 
     private static func send(_ request: URLRequest) async throws {
-        let (data, resp) = try await URLSession.shared.data(for: request)
+        let (data, resp) = try await session.data(for: request)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(code) else { throw APIError.http(code, errorMessage(from: data)) }

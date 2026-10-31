@@ -68,11 +68,10 @@ private struct ChartTooltipPanelView: View {
 final class ChartTooltipPanelPresenter: ObservableObject {
     private static let panelSize = CGSize(width: 138, height: 128)
 
-    private let model: ChartTooltipModel
-    private let panel: NSPanel
+    private let model = ChartTooltipModel()
+    private var panel: NSPanel?
 
-    init() {
-        let model = ChartTooltipModel()
+    private func makePanel() -> NSPanel {
         let hostingView = NSHostingView(rootView: ChartTooltipPanelView(model: model))
         let panel = NSPanel(
             contentRect: CGRect(origin: .zero, size: Self.panelSize),
@@ -92,8 +91,7 @@ final class ChartTooltipPanelPresenter: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
 
-        self.model = model
-        self.panel = panel
+        return panel
     }
 
     func show(
@@ -101,6 +99,8 @@ final class ChartTooltipPanelPresenter: ObservableObject {
         at cursor: CGPoint,
         content: () -> ChartTooltipContent
     ) {
+        let panel = self.panel ?? makePanel()
+        self.panel = panel
         if model.content?.hour != hour {
             model.content = content()
         }
@@ -120,8 +120,16 @@ final class ChartTooltipPanelPresenter: ObservableObject {
     }
 
     func hide() {
-        guard panel.isVisible else { return }
+        guard let panel, panel.isVisible else { return }
         panel.orderOut(nil)
         model.content = nil
+    }
+
+    func release() {
+        hide()
+        model.content = nil
+        panel?.contentView = nil
+        panel?.close()
+        panel = nil
     }
 }
