@@ -96,6 +96,8 @@ target is a thin SwiftUI shell. Commits follow
 [Conventional Commits](https://www.conventionalcommits.org), which is what
 builds the release changelogs.
 
+Memory measurements and the isolated Release benchmark: [Memory footprint](docs/memory-footprint.md).
+
 ## Releasing
 
 ```sh

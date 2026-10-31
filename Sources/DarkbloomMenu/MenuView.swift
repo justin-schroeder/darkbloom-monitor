@@ -1404,7 +1404,7 @@ private struct HourlyActivityChart: View {
         .frame(height: height)
         .padding(.top, 2)
         .onDisappear {
-            clearHover()
+            tooltipPresenter.release()
         }
         .accessibilityLabel("\(metric.axisTitle) by hour")
         .accessibilityValue(accessibilityValue)
@@ -2035,10 +2035,15 @@ private struct EmptyStateLine: View {
 }
 
 @MainActor
-private enum PreferencesWindow {
-    private static var window: NSWindow?
+private final class PreferencesWindow: NSObject, NSWindowDelegate {
+    private static let shared = PreferencesWindow()
+    private var window: NSWindow?
 
     static func show(preferences: MenuPreferencesStore, state: AppState) {
+        shared.show(preferences: preferences, state: state)
+    }
+
+    private func show(preferences: MenuPreferencesStore, state: AppState) {
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -2050,6 +2055,7 @@ private enum PreferencesWindow {
         newWindow.title = "Darkbloom Monitor Preferences"
         newWindow.styleMask = [.titled, .closable, .miniaturizable]
         newWindow.isReleasedWhenClosed = false
+        newWindow.delegate = self
         newWindow.level = .floating
         newWindow.collectionBehavior = [.moveToActiveSpace]
         newWindow.setContentSize(NSSize(width: 640, height: 520))
@@ -2059,5 +2065,10 @@ private enum PreferencesWindow {
         newWindow.orderFrontRegardless()
         window = newWindow
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentViewController = nil
+        window = nil
     }
 }

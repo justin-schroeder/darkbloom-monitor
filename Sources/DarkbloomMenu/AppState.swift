@@ -61,6 +61,7 @@ final class AppState: ObservableObject {
     private var lastFreshDaemon: DaemonState?
     private var daemonReadMisses = 0
     private var hardwareRefreshInFlight = false
+    private var remoteRefreshInFlight = false
     private var fanControlInFlight = false
     private var fanControlSettings: FanControlSettings = .defaultValue
     private let activityHistoryURL: URL
@@ -239,6 +240,9 @@ final class AppState: ObservableObject {
     // MARK: - Coordinator data
 
     func refreshRemote() async {
+        guard !remoteRefreshInFlight else { return }
+        remoteRefreshInFlight = true
+        defer { remoteRefreshInFlight = false }
         do {
             async let earningsTask = CoordinatorAPI.accountEarnings()
             async let connectedTask = CoordinatorAPI.connectedProviders()
@@ -449,6 +453,7 @@ private struct CLIResult {
 private final class CLIExecution: @unchecked Sendable {
     private static let timeout: TimeInterval = 60
     private static let terminationGrace: TimeInterval = 3
+    private static let stderrLimit = 16_384
 
     private let continuation: CheckedContinuation<CLIResult, Never>
     private let lock = NSLock()
@@ -463,7 +468,15 @@ private final class CLIExecution: @unchecked Sendable {
         guard !data.isEmpty else { return }
         lock.lock()
         if !finished {
-            stderrData.append(data)
+            // Copy bytes so a short tail cannot retain a large input allocation.
+            data.suffix(Self.stderrLimit).withUnsafeBytes {
+                stderrData.append($0.bindMemory(to: UInt8.self))
+            }
+            if stderrData.count > Self.stderrLimit {
+                stderrData = stderrData.suffix(Self.stderrLimit).withUnsafeBytes {
+                    Data(bytes: $0.baseAddress!, count: $0.count)
+                }
+            }
         }
         lock.unlock()
     }
@@ -505,7 +518,7 @@ private final class CLIExecution: @unchecked Sendable {
         lock.lock()
         let data = stderrData
         lock.unlock()
-        return String(data: data, encoding: .utf8)?
+        return String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -516,6 +529,7 @@ private final class CLIExecution: @unchecked Sendable {
             return
         }
         finished = true
+        stderrData = Data()
         lock.unlock()
         continuation.resume(returning: CLIResult(exitCode: exitCode, message: message))
     }
